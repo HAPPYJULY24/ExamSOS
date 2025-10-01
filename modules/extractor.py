@@ -3,7 +3,7 @@
 
 from openai import OpenAI
 from modules import file_handler
-from config import DEFAULT_MODEL
+from config import DEFAULT_MODEL, OPENAI_API_KEY
 from langdetect import detect
 import re
 
@@ -38,7 +38,7 @@ def detect_subject(text: str) -> str:
 
 
 def _looks_like_parse_error(text: str) -> bool:
-    """检查解析结果是否很可能是错误/占位信息（避免把错误当正文发给模型）"""
+    """检查解析结果是否很可能是错误/占位信息"""
     if not text:
         return True
     bad_signals = [
@@ -46,21 +46,18 @@ def _looks_like_parse_error(text: str) -> bool:
         "无法", "不支持", "无法读取", "无法打开", "打不开", "unsupported file", "file format"
     ]
     low = text.lower()
-    # 如果文本中包含这些明显的错误提示且长度很短（比如 < 200 字），认为是解析失败
     if len(text.strip()) < 300:
         for s in bad_signals:
             if s in low:
                 return True
-    # 另外如果文本只包含很少真实单词（如只有 'File format not supported'），判定为错误
     words = re.findall(r"[A-Za-z\u4e00-\u9fff0-9]+", text)
     if len(words) < 10:
-        # 但允许短但有意义的文本，故设置阈值
         return True
     return False
 
 
 def _chunk_text(text: str, max_chars: int = 3500):
-    """把长文尝试在换行处切分，避免在段落中间切断"""
+    """把长文尝试在换行处切分"""
     chunks = []
     if not text:
         return []
@@ -70,7 +67,7 @@ def _chunk_text(text: str, max_chars: int = 3500):
         end = min(start + max_chars, L)
         if end < L:
             nl = text.rfind("\n", start, end)
-            if nl > start + 40:  # 保证至少保留一定长度
+            if nl > start + 40:
                 end = nl
         chunk = text[start:end].strip()
         if chunk:
@@ -83,7 +80,7 @@ def _chunk_text(text: str, max_chars: int = 3500):
 
 def extract_summary(
     texts,
-    api_key,
+    api_key=None,
     mode="detailed",
     bilingual=False,
     target_lang="zh",
@@ -91,12 +88,15 @@ def extract_summary(
     custom_instruction=None
 ):
     """
-    简化且更安全的 extract_summary：
-    - 直接接收解析好的文本列表 (list[str])，不再解析文件
-    - 对每段文本分块处理 -> 先抽取式笔记 -> 再合并生成最终 notes
-    - 保证不生成与原文无关的条目
+    提取重点笔记
+    - 优先使用传入的 api_key
+    - 如果没有传，则使用 config.OPENAI_API_KEY
     """
-    client = OpenAI(api_key=api_key)
+    key_to_use = api_key or OPENAI_API_KEY
+    if not key_to_use:
+        raise RuntimeError("❌ 没有可用的 OpenAI API Key，请检查 config.py 或传入参数。")
+
+    client = OpenAI(api_key=key_to_use)
 
     # ---------- 1) 基本校验 ----------
     if not texts or not isinstance(texts, list):
@@ -111,7 +111,7 @@ def extract_summary(
     target_lang_name = "Chinese" if target_lang == "zh" else "English"
     subject = detect_subject(combined_text)
 
-    # ---------- 2) 分块 + chunk 抽取 ----------
+    # ---------- 2) 分块抽取 ----------
     file_level_outputs = []
     for idx, text in enumerate(texts, start=1):
         fname = f"Document_{idx}"
@@ -121,19 +121,15 @@ def extract_summary(
         for c_idx, chunk in enumerate(chunks, start=1):
             chunk_prompt = f"""
 You are an extractor whose job is to find **explicit** headings/terms and important sentences inside the given text chunk.
-**Rules (must follow strictly)**:
-1) Only extract items that explicitly appear in the text. Do NOT invent new headings or new technical terms.
-2) If the text contains clear headings (like 'Chapter', 'Topic', 'Buffer Overflow'), use those exact headings.
-3) For each extracted heading/term, include one short explanation (1-3 sentences) **directly paraphrased from the text**, and an example if present.
-4) If no clear headings, select up to 5 important sentences and output as bullet points.
-5) Output format (Markdown bullets only):
-   - **<heading or phrase from text>**: <1-3 sentence paraphrase> (example: <example or N/A>)
-6) Do NOT output preface, conclusion, or commentary.
-7) Output language: {main_lang}.
-
-Here is the chunk (START):
+Rules:
+1) Only extract items that explicitly appear in the text. Do NOT invent new headings or terms.
+2) Use original headings if present.
+3) Each item: heading + 1-3 sentence paraphrase + example if present.
+4) If no headings, pick up to 5 important sentences as bullets.
+5) Markdown bullets only.
+6) Output language: {main_lang}.
+Here is the chunk:
 {chunk}
-(END)
 """
             resp = client.chat.completions.create(
                 model=DEFAULT_MODEL,
@@ -151,55 +147,50 @@ Here is the chunk (START):
         file_merged = "\n\n".join(chunk_summaries).strip()
         file_level_outputs.append({"name": fname, "content": file_merged})
 
-    # ---------- 3) 合并所有文本并生成最终 notes ----------
+    # ---------- 3) 合并所有文本 ----------
     files_block = ""
     for fo in file_level_outputs:
         files_block += f"## FILE: {fo['name']}\n{fo['content']}\n\n"
 
+    # ---------- 4) 模式选择 ----------
     if mode == "detailed":
         mode_instruction = (
             "MODE: DETAILED\n"
             "For each FILE and each heading/term, produce:\n"
-            " - Explanation: 3-6 short sentences, plain language.\n"
-            " - Life/example: one-line real-life analogy if present, else N/A.\n"
-            " - Exam example: if generate_mock=True, provide one short exam-style Q+A, else N/A.\n"
+            " - Explanation: 3-6 short sentences\n"
+            " - Life/example: one-line analogy if present, else N/A\n"
+            " - Exam example: if generate_mock=True, short exam-style Q+A, else N/A\n"
         )
     elif mode == "exam":
         mode_instruction = (
-            "MODE: EXAM (concise notes)\n"
+            "MODE: EXAM\n"
             "For each FILE and each heading/term, produce:\n"
-            " - Short explanation: 1-2 short sentences (exam-ready).\n"
-            " - Exam answer template: one-line phrasing.\n"
-            " - Example: if generate_mock=True, provide 1 short practice Q+A, else N/A.\n"
+            " - Short explanation: 1-2 sentences\n"
+            " - Exam answer template: one-line phrasing\n"
+            " - Example: if generate_mock=True, short practice Q+A, else N/A\n"
         )
-    else:  # custom
-        custom_text = custom_instruction.strip() if custom_instruction else "No additional custom instruction."
-        mode_instruction = (
-            "MODE: CUSTOM\n"
-            f"User custom instruction: {custom_text}\n"
-            "Follow user instruction but still avoid inventing new headings or facts.\n"
-        )
+    else:
+        custom_text = custom_instruction.strip() if custom_instruction else "No custom instruction."
+        mode_instruction = f"MODE: CUSTOM\nUser instruction: {custom_text}\n"
 
     final_prompt = f"""
-You are a careful course-note synthesizer. Input: structured extracts from multiple files (headings and paraphrases).
-**Strict rules (MUST follow)**:
-1) Use only headings/terms that appear in the input. Do NOT invent new ones.
-2) Output must be Markdown. For each file: "## FILE: <filename>".
-3) Under each file, for each heading/term output:
-   - Explanation: {('(3-6 sentences)' if mode == 'detailed' else '(1-2 sentences)')}
-   - Life example: <content>  (if exam mode, N/A)
-   - Exam example: <content>  (if generate_mock=False, N/A; else provide 1 short Q+A)
-4) No preface, conclusion, or unrelated items. No parser error text allowed.
-5) If heading repeats across files, keep detail first time, later write "(重复，参见上文)".
+You are a careful course-note synthesizer.
+Rules:
+1) Use only headings/terms from input. Do NOT invent.
+2) Markdown only. Each file starts with "## FILE: <filename>".
+3) For each heading/term:
+   - Explanation: {'3-6 sentences' if mode == 'detailed' else '1-2 sentences'}
+   - Life example
+   - Exam example (if generate_mock=True)
+4) No preface, conclusion, or unrelated items.
 
 {mode_instruction}
-Output language: {main_lang} {("(and " + target_lang_name + " translation after each field)" if bilingual else "")}
+Output language: {main_lang}{' and ' + target_lang_name + ' translation' if bilingual else ''}.
 
-Now synthesize notes (BEGIN):
+Input extracts:
 Subject detected: {subject}
 
 {files_block}
-(END)
 """
 
     resp2 = client.chat.completions.create(
