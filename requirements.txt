@@ -32,8 +32,5 @@ streamlit
 # =======================
 langdetect
 python-dotenv
-
-# =======================
-# AI
-# =======================
 openai>=1.0.0
+pyperclip   # ← 这里新加
