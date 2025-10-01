@@ -1,4 +1,4 @@
-# Home.py
+# app.py
 import streamlit as st
 import modules.summary_generator as sg  # 预先导入模块
 
