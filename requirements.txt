@@ -33,4 +33,4 @@ streamlit
 langdetect
 python-dotenv
 openai>=1.0.0
-pyperclip   # ← 这里新加
+pyperclip  
