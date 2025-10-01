@@ -34,3 +34,8 @@ langdetect
 python-dotenv
 openai>=1.0.0
 pyperclip  
+
+# =======================
+# PDF 生成
+# =======================
+reportlab
