@@ -1,5 +1,5 @@
 # modules/extractor.py
-# AI 提取重点 (支持语言检测 & 三大模式 + 学科类型识别 + 更严格的分治处理)
+# AI 提取重点 (支持语言检测 & 三大模式 + 学科类型识别 + 分块处理)
 
 from openai import OpenAI
 from modules import file_handler
@@ -8,14 +8,14 @@ from langdetect import detect
 import re
 
 
-# ------------------ 辅助函数 ------------------
+# ================== 辅助函数 ==================
 
 def detect_language(text: str) -> str:
     """检测主要语言（返回 'en' 或 'zh'）"""
     try:
         lang = detect(text)
         return "zh" if lang and lang.startswith("zh") else "en"
-    except:
+    except Exception:
         return "en"  # 默认英文
 
 
@@ -27,42 +27,36 @@ def detect_subject(text: str) -> str:
         "physics": ["力学", "电磁", "量子", "热力学", "波动", "Newton", "Einstein"],
         "chemistry": ["化学式", "分子", "反应", "酸碱", "化合物", "reaction"],
         "engineering": ["电路", "结构", "控制系统", "机械", "材料力学"],
-        "theory": ["概念", "定义", "章节", "理论", "原理", "模型"]
+        "theory": ["概念", "定义", "章节", "理论", "原理", "模型"],
     }
     text_lower = (text or "").lower()
     for subject, kws in keywords.items():
-        for kw in kws:
-            if kw.lower() in text_lower:
-                return subject
+        if any(kw.lower() in text_lower for kw in kws):
+            return subject
     return "general"
 
 
 def _looks_like_parse_error(text: str) -> bool:
-    """检查解析结果是否很可能是错误/占位信息"""
+    """检查文本是否可能是错误/占位信息"""
     if not text:
         return True
     bad_signals = [
         "unsupported", "not supported", "cannot", "unable", "error", "failed",
-        "无法", "不支持", "无法读取", "无法打开", "打不开", "unsupported file", "file format"
+        "无法", "不支持", "无法读取", "无法打开", "打不开", "unsupported file", "file format",
     ]
     low = text.lower()
     if len(text.strip()) < 300:
-        for s in bad_signals:
-            if s in low:
-                return True
+        if any(s in low for s in bad_signals):
+            return True
     words = re.findall(r"[A-Za-z\u4e00-\u9fff0-9]+", text)
-    if len(words) < 10:
-        return True
-    return False
+    return len(words) < 10
 
 
 def _chunk_text(text: str, max_chars: int = 3500):
-    """把长文尝试在换行处切分"""
-    chunks = []
+    """把长文在换行处优先切分"""
     if not text:
         return []
-    start = 0
-    L = len(text)
+    chunks, start, L = [], 0, len(text)
     while start < L:
         end = min(start + max_chars, L)
         if end < L:
@@ -76,7 +70,7 @@ def _chunk_text(text: str, max_chars: int = 3500):
     return chunks
 
 
-# ------------------ 主函数 ------------------
+# ================== 主函数 ==================
 
 def extract_summary(
     texts,
@@ -85,12 +79,15 @@ def extract_summary(
     bilingual=False,
     target_lang="zh",
     generate_mock=False,
-    custom_instruction=None
+    custom_instruction=None,
 ):
     """
     提取重点笔记
-    - 优先使用传入的 api_key
-    - 如果没有传，则使用 config.OPENAI_API_KEY
+    - 优先使用传入的 api_key，否则使用 config.OPENAI_API_KEY
+    - mode: "detailed" / "exam" / "custom"
+    - bilingual: 是否双语输出
+    - target_lang: zh/en
+    - generate_mock: 是否生成模拟题
     """
     key_to_use = api_key or OPENAI_API_KEY
     if not key_to_use:
@@ -121,6 +118,7 @@ def extract_summary(
         for c_idx, chunk in enumerate(chunks, start=1):
             chunk_prompt = f"""
 You are an extractor whose job is to find **explicit** headings/terms and important sentences inside the given text chunk.
+
 Rules:
 1) Only extract items that explicitly appear in the text. Do NOT invent new headings or terms.
 2) Use original headings if present.
@@ -128,6 +126,7 @@ Rules:
 4) If no headings, pick up to 5 important sentences as bullets.
 5) Markdown bullets only.
 6) Output language: {main_lang}.
+
 Here is the chunk:
 {chunk}
 """
@@ -135,10 +134,10 @@ Here is the chunk:
                 model=DEFAULT_MODEL,
                 messages=[
                     {"role": "system", "content": "You are a careful extractor that only extracts content that appears in the input text."},
-                    {"role": "user", "content": chunk_prompt}
+                    {"role": "user", "content": chunk_prompt},
                 ],
                 max_tokens=800,
-                temperature=0.0
+                temperature=0.0,
             )
             chunk_result = resp.choices[0].message.content.strip()
             if chunk_result:
@@ -148,9 +147,7 @@ Here is the chunk:
         file_level_outputs.append({"name": fname, "content": file_merged})
 
     # ---------- 3) 合并所有文本 ----------
-    files_block = ""
-    for fo in file_level_outputs:
-        files_block += f"## FILE: {fo['name']}\n{fo['content']}\n\n"
+    files_block = "".join([f"## FILE: {fo['name']}\n{fo['content']}\n\n" for fo in file_level_outputs])
 
     # ---------- 4) 模式选择 ----------
     if mode == "detailed":
@@ -173,8 +170,10 @@ Here is the chunk:
         custom_text = custom_instruction.strip() if custom_instruction else "No custom instruction."
         mode_instruction = f"MODE: CUSTOM\nUser instruction: {custom_text}\n"
 
+    # ---------- 5) 总结生成 ----------
     final_prompt = f"""
 You are a careful course-note synthesizer.
+
 Rules:
 1) Use only headings/terms from input. Do NOT invent.
 2) Markdown only. Each file starts with "## FILE: <filename>".
@@ -197,10 +196,10 @@ Subject detected: {subject}
         model=DEFAULT_MODEL,
         messages=[
             {"role": "system", "content": "You are a disciplined note synthesizer. Follow instructions strictly."},
-            {"role": "user", "content": final_prompt}
+            {"role": "user", "content": final_prompt},
         ],
         max_tokens=3000,
-        temperature=0.0
+        temperature=0.0,
     )
 
     final_text = resp2.choices[0].message.content or ""
