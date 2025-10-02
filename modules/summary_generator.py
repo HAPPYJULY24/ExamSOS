@@ -225,48 +225,49 @@ def run():
         else:
             st.warning("⚠️ 请先上传文件！")
 
-# ---------- Step 4: 修改与导出 ----------
+    # ---------- Step 4: 修改与导出 ----------
     elif st.session_state["step"] == 4:
         st.subheader("📖 提取结果")
 
-        summary_text = st.session_state["summary"]
+        summary_text = st.session_state.get("summary", "")
 
-        # 用 st.code 显示结果，自带复制按钮
-        st.code(summary_text, language="text")
-        st.caption("⬆️ 点击右上角的 📋 按钮即可复制内容")
+        if summary_text.strip():
+            # ✅ 用 st.code 显示结果，自带复制按钮
+            st.code(summary_text, language="text")
+            st.caption("⬆️ 点击右上角的 📋 按钮即可复制内容")
 
-        st.markdown("---")
-        st.subheader("✏️ 局部修改")
-        selected_text = st.text_area(
-            "请输入你想修改的片段（从上面复制过来）",
-            placeholder="粘贴需要调整的部分...",
-            key="selected_text_area"
-        )
-        user_request = st.text_input(
-            "请输入修改要求",
-            placeholder="例如：翻译成英文 / 解释更详细 / 用表格总结",
-            key="user_request_input"
-        )
+            st.markdown("---")
+            st.subheader("✏️ 局部修改")
+            selected_text = st.text_area(
+                "请输入你想修改的片段（从上面复制过来）",
+                placeholder="粘贴需要调整的部分...",
+                key="selected_text_area"
+            )
+            user_request = st.text_input(
+                "请输入修改要求",
+                placeholder="例如：翻译成英文 / 解释更详细 / 用表格总结",
+                key="user_request_input"
+            )
 
-        if st.button("提交修改", key="submit_modification"):
-            if not selected_text.strip() or not user_request.strip():
-                st.warning("⚠️ 请先粘贴片段并输入修改要求")
-            else:
-                try:
-                    lang = detect(selected_text)
-                except:
-                    lang = "en"
-
-                if lang == "en":
-                    lang_instruction = "Please make sure the output remains in English."
-                elif lang.startswith("zh"):
-                    lang_instruction = "请确保输出保持为中文。"
+            if st.button("提交修改", key="submit_modification"):
+                if not selected_text.strip() or not user_request.strip():
+                    st.warning("⚠️ 请先粘贴片段并输入修改要求")
                 else:
-                    lang_instruction = "Keep the same language as the original text."
+                    try:
+                        lang = detect(selected_text)
+                    except:
+                        lang = "en"
 
-                with st.spinner("AI 正在修改中..."):
-                    client = openai.OpenAI(api_key=OPENAI_API_KEY)
-                    prompt = f"""以下是文档中的一个片段，请根据用户的需求进行修改。
+                    if lang == "en":
+                        lang_instruction = "Please make sure the output remains in English."
+                    elif lang.startswith("zh"):
+                        lang_instruction = "请确保输出保持为中文。"
+                    else:
+                        lang_instruction = "Keep the same language as the original text."
+
+                    with st.spinner("AI 正在修改中..."):
+                        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+                        prompt = f"""以下是文档中的一个片段，请根据用户的需求进行修改。
     注意：保持原文片段的语言风格不变。
 
     原文片段：
@@ -279,55 +280,56 @@ def run():
 
     请输出修改后的结果：
     """
-                    response = client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[{"role": "user", "content": prompt}]
-                    )
-                    new_text = response.choices[0].message.content.strip()
+                        response = client.chat.completions.create(
+                            model="gpt-4o-mini",
+                            messages=[{"role": "user", "content": prompt}]
+                        )
+                        new_text = response.choices[0].message.content.strip()
 
-                st.session_state["pending_new_text"] = new_text
-                st.session_state["pending_selected_text"] = selected_text
-                st.session_state["pending_user_request"] = user_request
-                st.session_state["show_pending"] = True
-                st.rerun()
+                    st.session_state["pending_new_text"] = new_text
+                    st.session_state["pending_selected_text"] = selected_text
+                    st.session_state["pending_user_request"] = user_request
+                    st.session_state["show_pending"] = True
+                    st.rerun()
 
-        if st.session_state.get("show_pending"):
-            st.markdown("### 🔍 修改对比结果")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("原文片段")
-                st.text_area("原文", st.session_state.get("pending_selected_text", ""), height=200, key="pending_original")
-            with col2:
-                st.subheader("修改后")
-                st.text_area("修改后", st.session_state.get("pending_new_text", ""), height=200, key="pending_new")
+            if st.session_state.get("show_pending"):
+                st.markdown("### 🔍 修改对比结果")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.subheader("原文片段")
+                    st.text_area("原文", st.session_state.get("pending_selected_text", ""), height=200, key="pending_original")
+                with col2:
+                    st.subheader("修改后")
+                    st.text_area("修改后", st.session_state.get("pending_new_text", ""), height=200, key="pending_new")
 
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("✅ 应用修改", key="apply_pending"):
-                    pending_sel = st.session_state.get("pending_selected_text")
-                    pending_new = st.session_state.get("pending_new_text")
-                    if pending_sel and pending_sel in st.session_state["summary"]:
-                        st.session_state["summary"] = st.session_state["summary"].replace(pending_sel, pending_new, 1)
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✅ 应用修改", key="apply_pending"):
+                        pending_sel = st.session_state.get("pending_selected_text")
+                        pending_new = st.session_state.get("pending_new_text")
+                        if pending_sel and pending_sel in st.session_state["summary"]:
+                            st.session_state["summary"] = st.session_state["summary"].replace(pending_sel, pending_new, 1)
+                            st.session_state.pop("pending_new_text", None)
+                            st.session_state.pop("pending_selected_text", None)
+                            st.session_state.pop("pending_user_request", None)
+                            st.session_state["show_pending"] = False
+                            st.success("✅ 修改已应用！")
+                            st.rerun()
+                        else:
+                            st.warning("⚠️ 未能在原文中找到待替换的片段，可能已被修改或不完全匹配。")
+                with col2:
+                    if st.button("❌ 取消修改", key="cancel_pending"):
                         st.session_state.pop("pending_new_text", None)
                         st.session_state.pop("pending_selected_text", None)
                         st.session_state.pop("pending_user_request", None)
                         st.session_state["show_pending"] = False
-                        st.success("✅ 修改已应用！")
+                        st.info("已取消修改。")
                         st.rerun()
-                    else:
-                        st.warning("⚠️ 未能在原文中找到待替换的片段，可能已被修改或不完全匹配。")
-            with col2:
-                if st.button("❌ 取消修改", key="cancel_pending"):
-                    st.session_state.pop("pending_new_text", None)
-                    st.session_state.pop("pending_selected_text", None)
-                    st.session_state.pop("pending_user_request", None)
-                    st.session_state["show_pending"] = False
-                    st.info("已取消修改。")
-                    st.rerun()
+
+        else:
+            st.info("⚠️ 暂无内容，请先生成总结。")
 
         navigation_buttons("上一步", None, prev_step=3)
-
-
 
 # --------- 主入口 ---------
 if __name__ == "__main__":
