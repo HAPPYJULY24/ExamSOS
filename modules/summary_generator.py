@@ -228,16 +228,27 @@ def run():
     # ---------- Step 4: 修改与导出 ----------
     elif st.session_state["step"] == 4:
         st.subheader("📖 提取结果")
+
+        summary_text = st.session_state["summary"]
+
         st.text_area(
             "结果预览",
-            st.session_state["summary"],
+            summary_text,
             height=400,
             key="summary_text_area"
         )
 
-        if st.button("📋 一键复制", key="copy_summary"):
-            pyperclip.copy(st.session_state["summary"])
-            st.success("✅ 已复制到剪贴板！")
+    # 使用 JS 实现前端复制
+    if st.button("📋 一键复制", key="copy_summary"):
+        st.write(
+            f"""
+            <script>
+            navigator.clipboard.writeText(`{summary_text}`);
+            alert("✅ 已复制到剪贴板！");
+            </script>
+            """,
+            unsafe_allow_html=True
+        )
 
         st.markdown("---")
         st.subheader("✏️ 局部修改")
