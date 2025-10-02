@@ -225,30 +225,15 @@ def run():
         else:
             st.warning("⚠️ 请先上传文件！")
 
-    # ---------- Step 4: 修改与导出 ----------
+# ---------- Step 4: 修改与导出 ----------
     elif st.session_state["step"] == 4:
         st.subheader("📖 提取结果")
 
         summary_text = st.session_state["summary"]
 
-        st.text_area(
-            "结果预览",
-            summary_text,
-            height=400,
-            key="summary_text_area"
-        )
-
-    # 使用 JS 实现前端复制
-    if st.button("📋 一键复制", key="copy_summary"):
-        st.write(
-            f"""
-            <script>
-            navigator.clipboard.writeText(`{summary_text}`);
-            alert("✅ 已复制到剪贴板！");
-            </script>
-            """,
-            unsafe_allow_html=True
-        )
+        # 用 st.code 显示结果，自带复制按钮
+        st.code(summary_text, language="text")
+        st.caption("⬆️ 点击右上角的 📋 按钮即可复制内容")
 
         st.markdown("---")
         st.subheader("✏️ 局部修改")
@@ -282,18 +267,18 @@ def run():
                 with st.spinner("AI 正在修改中..."):
                     client = openai.OpenAI(api_key=OPENAI_API_KEY)
                     prompt = f"""以下是文档中的一个片段，请根据用户的需求进行修改。
-注意：保持原文片段的语言风格不变。
+    注意：保持原文片段的语言风格不变。
 
-原文片段：
-{selected_text}
+    原文片段：
+    {selected_text}
 
-用户的修改要求：
-{user_request}
+    用户的修改要求：
+    {user_request}
 
-{lang_instruction}
+    {lang_instruction}
 
-请输出修改后的结果：
-"""
+    请输出修改后的结果：
+    """
                     response = client.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=[{"role": "user", "content": prompt}]
@@ -341,6 +326,7 @@ def run():
                     st.rerun()
 
         navigation_buttons("上一步", None, prev_step=3)
+
 
 
 # --------- 主入口 ---------
