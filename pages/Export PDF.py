@@ -1,12 +1,13 @@
 # pages/Export PDF.py
-#用于让用户手动导出的模块
+# 用于让用户手动导出的模块（支持简单 Markdown）
 
 import streamlit as st
 import os
+import re
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
 from datetime import datetime
 
 st.set_page_config(page_title="PDF 导出", layout="wide")
@@ -23,7 +24,7 @@ user_text = st.text_area(
 
 
 def save_to_pdf(text, filename="exported_notes.pdf"):
-    """使用 reportlab 将文本导出为 PDF（简易 ChatGPT 风格）"""
+    """使用 reportlab 将文本导出为 PDF，支持简单 Markdown 格式"""
     # 输出目录
     output_dir = "exports"
     os.makedirs(output_dir, exist_ok=True)
@@ -67,21 +68,48 @@ def save_to_pdf(text, filename="exported_notes.pdf"):
     story.append(Paragraph(f"生成时间：{timestamp}", styles["CustomBody"]))
     story.append(Spacer(1, 20))
 
-    # 逐行写入正文
+    # 逐行写入正文（解析 Markdown）
+    bullet_items = []
     for line in text.split("\n"):
-        if not line.strip():
-            story.append(Spacer(1, 12))  # 空行
-        elif line.strip().startswith("##"):
-            story.append(Paragraph(line.strip("## "), styles["Heading2"]))
-        elif line.strip().startswith("#"):
-            story.append(Paragraph(line.strip("# "), styles["Heading1"]))
-        elif line.strip().startswith("-"):
-            story.append(Paragraph("• " + line.strip("- "), styles["CustomBody"]))
+        line = line.strip()
+
+        # 空行
+        if not line:
+            if bullet_items:
+                story.append(ListFlowable(bullet_items, bulletType='bullet'))
+                bullet_items = []
+            story.append(Spacer(1, 12))
+            continue
+
+        # 处理 Markdown 粗体
+        line = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", line)
+
+        # 处理标题
+        if line.startswith("## "):
+            if bullet_items:
+                story.append(ListFlowable(bullet_items, bulletType='bullet'))
+                bullet_items = []
+            story.append(Paragraph(line[3:], styles["Heading2"]))
+        elif line.startswith("# "):
+            if bullet_items:
+                story.append(ListFlowable(bullet_items, bulletType='bullet'))
+                bullet_items = []
+            story.append(Paragraph(line[2:], styles["Heading1"]))
+
+        # 处理列表
+        elif line.startswith("- "):
+            bullet_items.append(ListItem(Paragraph(line[2:], styles["CustomBody"])))
         else:
+            if bullet_items:
+                story.append(ListFlowable(bullet_items, bulletType='bullet'))
+                bullet_items = []
             story.append(Paragraph(line, styles["CustomBody"]))
 
-    doc.build(story)
+    # 收尾（如果最后还有列表）
+    if bullet_items:
+        story.append(ListFlowable(bullet_items, bulletType='bullet'))
 
+    doc.build(story)
     return pdf_path
 
 
