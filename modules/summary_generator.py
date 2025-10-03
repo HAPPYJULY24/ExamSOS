@@ -105,7 +105,7 @@ def run():
             "上传文件 (支持 PDF / DOCX / TXT / PPTX )",
             accept_multiple_files=True,
             type=["pdf", "docx", "txt", "pptx"]
-     )
+         )
 
     # ================= 性能优化部分 =================
     from concurrent.futures import ThreadPoolExecutor
