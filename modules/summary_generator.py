@@ -86,9 +86,17 @@ def run():
 
     # ---------- 步骤显示 ----------
     steps = ["📂 上传文件", "🌐 设置语言 & 风格", "📑 提取重点", "✏️ 修改与导出"]
-    progress = int((st.session_state["step"] - 1) / (len(steps) - 1) * 100)
+
+    # 限制 step 在合法范围内
+    current_step = st.session_state.get("step", 1)
+    current_step = max(1, min(current_step, len(steps)))
+
+    # 计算进度
+    progress = int((current_step - 1) / (len(steps) - 1) * 100)
     st.progress(progress)
-    st.markdown(f"### 当前进度：{steps[st.session_state['step']-1]}")
+
+    # 显示当前进度文字
+    st.markdown(f"### 当前进度：{steps[current_step - 1]}")
 
    
     # ---------- Step 1: 上传文件 ----------
@@ -97,7 +105,7 @@ def run():
             "上传文件 (支持 PDF / DOCX / TXT / PPTX )",
             accept_multiple_files=True,
             type=["pdf", "docx", "txt", "pptx"]
-    )
+     )
 
     # ================= 性能优化部分 =================
     from concurrent.futures import ThreadPoolExecutor
