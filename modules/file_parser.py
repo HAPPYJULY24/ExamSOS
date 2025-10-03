@@ -82,27 +82,41 @@ def extract_text_from_pptx_file(file_bytes, filename="unknown.pptx"):
 
 
 
-def extract_text_from_file(uploaded_file):
-    """根据文件类型提取纯文本（支持 PPTX/DOCX/PDF/TXT，全部带 OCR）"""
-    filename = uploaded_file.name.lower()
-    file_bytes = uploaded_file.read()
+def extract_text_from_file(uploaded_file, filename=None):
+    """
+    根据文件类型提取纯文本（支持 PPTX/DOCX/PDF/TXT，全部带 OCR）
+    uploaded_file: 文件对象或 io.BytesIO
+    filename: 可选，用于指定文件名（方便缓存/日志）
+    """
+    if filename is None:
+        # 尝试从文件对象获取 name 属性
+        filename = getattr(uploaded_file, "name", "unknown").lower()
+    else:
+        filename = filename.lower()
+
+    # 如果是 BytesIO，需要 reset
+    if hasattr(uploaded_file, "seek"):
+        uploaded_file.seek(0)
+
+    file_bytes = uploaded_file.read() if hasattr(uploaded_file, "read") else uploaded_file
     file_stream = io.BytesIO(file_bytes)
 
+    # -------- PPTX --------
     if filename.endswith(".pptx"):
-        return extract_text_from_pptx_file(file_bytes)
+        return extract_text_from_pptx_file(file_bytes, filename=filename)
 
+    # -------- DOCX --------
     elif filename.endswith(".docx"):
         doc = Document(file_stream)
         text = []
 
-        # 1️⃣ 普通段落
         for p in doc.paragraphs:
             if p.text.strip():
                 text.append(p.text)
 
-        # 2️⃣ 图片 OCR
+        # 图片 OCR
         for rel in doc.part.rels.values():
-            if "image" in rel.target_ref:
+            if hasattr(rel, "target_ref") and "image" in rel.target_ref:
                 image_data = rel.target_part.blob
                 pil_img = Image.open(io.BytesIO(image_data))
                 ocr_text = ocr_image(pil_img)
@@ -111,15 +125,19 @@ def extract_text_from_file(uploaded_file):
 
         return "\n".join(text)
 
+
+    # -------- PDF --------
     elif filename.endswith(".pdf"):
         text = []
         with fitz.open(stream=file_bytes, filetype="pdf") as pdf_doc:
             for page_num, page in enumerate(pdf_doc, start=1):
                 page_text = page.get_text("text").strip()
 
-                pix = page.get_pixmap()
-                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                ocr_text = ocr_image(img)
+                ocr_text = ""
+                if not page_text or len(page_text) < 30:  # 页文字过少才 OCR
+                    pix = page.get_pixmap()
+                    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                    ocr_text = ocr_image(img)
 
                 combined_parts = set()
                 if page_text:
@@ -128,15 +146,17 @@ def extract_text_from_file(uploaded_file):
                     combined_parts.add(ocr_text)
 
                 combined_text = "\n".join(combined_parts)
-                text.append(f"【第 {page_num} 页】\n{combined_text}")
+                text.append(f"【第 {page_num} 页 - {filename}】\n{combined_text}")
 
         return "\n\n".join(text)
 
+    # -------- TXT --------
     elif filename.endswith(".txt"):
         return file_bytes.decode("utf-8", errors="ignore")
 
     else:
-        return "❌ 不支持的文件格式"
+        return f"❌ 不支持的文件格式: {filename}"
+
 
 
 def preview_files(uploaded_files):
