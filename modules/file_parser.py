@@ -2,17 +2,19 @@
 # 文件格式的转换，文件内容的提取
 # 输入处理器（上传 → 提取文字）
 
+import os
 import io
-import streamlit as st
+import tempfile
 from pptx import Presentation
 from docx import Document
 import fitz  # PyMuPDF
-from PIL import Image
+from PIL import Image, ImageStat
 import numpy as np
+import streamlit as st
 import easyocr
 
 # 初始化 OCR 引擎（中英文）
-OCR_READER = easyocr.Reader(['en', 'ch_sim'], gpu=False)  # 如果服务器支持 GPU，可改成 True
+OCR_READER = easyocr.Reader(['en', 'ch_sim'], gpu=False)  # gpu=True 如果服务器支持 GPU
 
 
 def ocr_image(pil_img):
@@ -25,46 +27,76 @@ def ocr_image(pil_img):
         return f"❌ OCR 识别失败: {e}"
 
 
-def extract_text_from_file(uploaded_file):
-    """根据文件类型提取纯文本（支持 PPTX/DOCX/PDF/TXT，全部带 OCR）"""
-    filename = uploaded_file.name.lower()
+def is_text_image(pil_img, threshold=0.05):
+    """
+    简单判断图片是否可能包含文字
+    threshold: 亮度方差阈值，默认 0.05
+    """
+    gray = pil_img.convert("L")
+    stat = ImageStat.Stat(gray)
+    variance = stat.var[0] / 255**2  # 方差归一化
+    return variance > threshold
 
-    # 一次性读入内存
-    file_bytes = uploaded_file.read()
-    file_stream = io.BytesIO(file_bytes)
 
-    # -------- PPTX --------
-    if filename.endswith(".pptx"):
-        prs = Presentation(file_stream)
+def extract_text_from_pptx_file(file_bytes):
+    """直接用 python-pptx 提取文字，同时对嵌入图片做 OCR（优化版）"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        pptx_path = os.path.join(tmpdir, "temp.pptx")
+        with open(pptx_path, "wb") as f:
+            f.write(file_bytes)
+
+        prs = Presentation(pptx_path)
         text = []
 
         for i, slide in enumerate(prs.slides, start=1):
             slide_text = []
-            # 直接提取文字（去掉 OCR）
+
+            # 1️⃣ 提取可编辑文字
             for shape in slide.shapes:
-                if hasattr(shape, "text") and shape.text.strip():
-                    slide_text.append(shape.text)
+                if shape.has_text_frame:
+                    for para in shape.text_frame.paragraphs:
+                        para_text = para.text.strip()
+                        if para_text:
+                            slide_text.append(para_text)
+
+            # 2️⃣ 对 slide 内图片做 OCR（优化：只对可能含文字的图片）
+            for shape in slide.shapes:
+                if shape.shape_type == 13:  # Picture 类型
+                    try:
+                        image = shape.image
+                        pil_img = Image.open(io.BytesIO(image.blob))
+                        if is_text_image(pil_img):
+                            ocr_text = ocr_image(pil_img)
+                            if ocr_text:
+                                slide_text.append(ocr_text)
+                    except Exception as e:
+                        slide_text.append(f"❌ Slide 图片 OCR 失败: {e}")
 
             if slide_text:
                 text.append(f"【Slide {i}】\n" + "\n".join(set(slide_text)))
 
         return "\n\n".join(text)
 
-    # -------- PPT（旧格式，不支持）--------
-    elif filename.endswith(".ppt"):
-        return "❌ 暂不支持 .ppt 格式，请先在本地另存为 .pptx 再上传。"
 
-    # -------- DOCX --------
+def extract_text_from_file(uploaded_file):
+    """根据文件类型提取纯文本（支持 PPTX/DOCX/PDF/TXT，全部带 OCR）"""
+    filename = uploaded_file.name.lower()
+    file_bytes = uploaded_file.read()
+    file_stream = io.BytesIO(file_bytes)
+
+    if filename.endswith(".pptx"):
+        return extract_text_from_pptx_file(file_bytes)
+
     elif filename.endswith(".docx"):
         doc = Document(file_stream)
         text = []
 
-        # 段落文本
+        # 1️⃣ 普通段落
         for p in doc.paragraphs:
             if p.text.strip():
                 text.append(p.text)
 
-        # 图片 OCR
+        # 2️⃣ 图片 OCR
         for rel in doc.part.rels.values():
             if "image" in rel.target_ref:
                 image_data = rel.target_part.blob
@@ -75,14 +107,12 @@ def extract_text_from_file(uploaded_file):
 
         return "\n".join(text)
 
-    # -------- PDF --------
     elif filename.endswith(".pdf"):
         text = []
         with fitz.open(stream=file_bytes, filetype="pdf") as pdf_doc:
             for page_num, page in enumerate(pdf_doc, start=1):
                 page_text = page.get_text("text").strip()
 
-                # OCR 每一页（如果 PDF 里有图片）
                 pix = page.get_pixmap()
                 img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                 ocr_text = ocr_image(img)
@@ -98,7 +128,6 @@ def extract_text_from_file(uploaded_file):
 
         return "\n\n".join(text)
 
-    # -------- TXT --------
     elif filename.endswith(".txt"):
         return file_bytes.decode("utf-8", errors="ignore")
 
