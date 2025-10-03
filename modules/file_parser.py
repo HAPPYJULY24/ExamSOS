@@ -11,24 +11,18 @@ import fitz  # PyMuPDF
 from PIL import Image, ImageStat
 import numpy as np
 import streamlit as st
-import easyocr
 
-# 初始化 OCR 引擎（中英文）
-OCR_READER = easyocr.Reader(['en', 'ch_sim'], gpu=False)
-
+# ==============================
+# OCR 功能占位（不加载 easyocr）
+# ==============================
 
 def ocr_image(pil_img):
-    """OCR 识别图片 -> 文字"""
-    try:
-        img_np = np.array(pil_img.convert('RGB'))
-        result = OCR_READER.readtext(img_np, detail=0)
-        return "\n".join(result).strip()
-    except Exception:
-        return ""  # 永远返回 string，避免报错信息污染结果
+    """OCR 识别图片 -> 文字（目前禁用，直接返回空字符串）"""
+    return ""
 
 
 def is_text_image(pil_img, threshold=0.05):
-    """简单判断图片是否可能包含文字"""
+    """简单判断图片是否可能包含文字（逻辑保留）"""
     gray = pil_img.convert("L")
     stat = ImageStat.Stat(gray)
     variance = stat.var[0] / 255**2
@@ -36,7 +30,7 @@ def is_text_image(pil_img, threshold=0.05):
 
 
 def extract_text_from_pptx_file(file_bytes, filename="unknown.pptx"):
-    """提取 PPTX 文本 + OCR 图片"""
+    """提取 PPTX 文本（OCR 暂时禁用）"""
     with tempfile.TemporaryDirectory() as tmpdir:
         pptx_path = os.path.join(tmpdir, filename)
         with open(pptx_path, "wb") as f:
@@ -56,14 +50,15 @@ def extract_text_from_pptx_file(file_bytes, filename="unknown.pptx"):
                         if para_text:
                             slide_text.append(para_text)
 
-            # 图片 OCR
+            # 图片 OCR（禁用）
+            # 保留代码接口，但 ocr_image 会返回 ""
             for shape in slide.shapes:
                 if shape.shape_type == 13:  # Picture
                     try:
                         image = shape.image
                         pil_img = Image.open(io.BytesIO(image.blob))
                         if is_text_image(pil_img):
-                            ocr_text = ocr_image(pil_img)
+                            ocr_text = ocr_image(pil_img)  # 这里永远 ""
                             if ocr_text:
                                 slide_text.append(ocr_text)
                     except Exception:
@@ -76,7 +71,7 @@ def extract_text_from_pptx_file(file_bytes, filename="unknown.pptx"):
 
 
 def extract_text_from_file(uploaded_file, filename=None):
-    """根据文件类型提取纯文本（支持 PPTX/DOCX/PDF/TXT，全部带 OCR）"""
+    """根据文件类型提取纯文本（支持 PPTX/DOCX/PDF/TXT，OCR 暂时禁用）"""
     filename = (filename or getattr(uploaded_file, "name", "unknown")).lower()
 
     # 确保 bytes 不会被读空
@@ -98,13 +93,14 @@ def extract_text_from_file(uploaded_file, filename=None):
             if p.text.strip():
                 text.append(p.text)
 
-        # 图片 OCR
+        # 图片 OCR（禁用）
+        # 接口保留，但不生效
         for rel in doc.part.rels.values():
             if hasattr(rel, "target_ref") and "image" in rel.target_ref:
                 try:
                     image_data = rel.target_part.blob
                     pil_img = Image.open(io.BytesIO(image_data))
-                    ocr_text = ocr_image(pil_img)
+                    ocr_text = ocr_image(pil_img)  # 始终 ""
                     if ocr_text:
                         text.append(ocr_text)
                 except Exception:
@@ -119,11 +115,8 @@ def extract_text_from_file(uploaded_file, filename=None):
             for page_num, page in enumerate(pdf_doc, start=1):
                 page_text = page.get_text("text").strip()
 
+                # OCR（禁用）
                 ocr_text = ""
-                if not page_text or len(page_text) < 30:
-                    pix = page.get_pixmap()
-                    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                    ocr_text = ocr_image(img)
 
                 combined_parts = []
                 if page_text:
