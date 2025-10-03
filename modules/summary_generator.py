@@ -92,48 +92,68 @@ def run():
 
    
     # ---------- Step 1: 上传文件 ----------
-    if st.session_state.get("step", 1) == 1:   # ✅ 防止 KeyError
-        uploaded_files = st.file_uploader(
-            "上传文件 (支持 PDF / DOCX / TXT / PPTX / PPT)",
-            accept_multiple_files=True,
-            type=["pdf", "docx", "txt", "pptx", "ppt"]
-        )
-        if uploaded_files:
-            st.session_state["uploaded_files"] = uploaded_files
-            st.session_state["parsed_texts"] = []   # 存放解析后的文本
-            st.success("✅ 文件上传成功！")
+if st.session_state.get("step", 1) == 1:   # ✅ 防止 KeyError
+    uploaded_files = st.file_uploader(
+        "上传文件 (支持 PDF / DOCX / TXT / PPTX / PPT)",
+        accept_multiple_files=True,
+        type=["pdf", "docx", "txt", "pptx", "ppt"]
+    )
 
-            # 展示解析预览
-            for uf in uploaded_files:
-                st.subheader(f"📖 {uf.name} - 内容预览")
+    # ================= 性能优化部分 =================
+    from concurrent.futures import ThreadPoolExecutor
 
-                preview_text = file_parser.extract_text_from_file(uf)
+    @st.cache_data(show_spinner=False)
+    def cached_extract(file_bytes, file_name):
+        """缓存解析结果（基于文件字节+文件名做唯一 key）"""
+        import io
+        from modules import file_parser
+        return file_parser.extract_text_from_file(io.BytesIO(file_bytes), file_name)
 
-                # 存入 session_state
-                st.session_state["parsed_texts"].append(preview_text)
+    def extract_texts_parallel(files):
+        """并行解析多个文件"""
+        results = []
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = []
+            for f in files:
+                futures.append(
+                    executor.submit(
+                        cached_extract,
+                        f.getvalue(),  # 缓存基于文件内容
+                        f.name
+                    )
+                )
+            for fut in futures:
+                results.append(fut.result())
+        return results
+    # =================================================
 
-                # ⚡ Debug：打印总字数
-                st.caption(f"提取总字数: {len(preview_text)}")
-                print(f"======= {uf.name} 提取完成，总字数 {len(preview_text)} =======")
+    if uploaded_files:
+        st.session_state["uploaded_files"] = uploaded_files
 
-                # ⚡ 控制台只打印前 1000 字，避免爆屏
-                print(preview_text[:1000])
+        # ✅ 如果没解析过，就解析一次（并行 + 缓存）
+        if "parsed_texts" not in st.session_state or not st.session_state["parsed_texts"]:
+            with st.spinner("⏳ 正在解析文件..."):
+                st.session_state["parsed_texts"] = extract_texts_parallel(uploaded_files)
+            st.success("✅ 文件解析完成！")
 
-                # ⚡ 前端：展示前 2000 字（避免卡顿），并提示完整度
-                st.text_area(
-                    "内容 (预览，最多 2000 字)",
-                    preview_text[:2000],
-                    height=300,
-                    key=f"preview_{uf.name}"
+        # 展示预览
+        for uf, preview_text in zip(uploaded_files, st.session_state["parsed_texts"]):
+            st.subheader(f"📖 {uf.name} - 内容预览")
+            st.caption(f"提取总字数: {len(preview_text)}")
+            print(f"======= {uf.name} 提取完成，总字数 {len(preview_text)} =======")
+
+            st.text_area(
+                "内容 (预览，最多 2000 字)",
+                preview_text[:2000],
+                height=300,
+                key=f"preview_{uf.name}"
+            )
+            if len(preview_text) > 2000:
+                st.warning(
+                    f"⚠️ 内容过长，已截断展示 (仅显示前 2000 字，完整字数 {len(preview_text)})"
                 )
 
-                if len(preview_text) > 2000:
-                    st.warning(
-                        f"⚠️ 内容过长，已截断展示 (仅显示前 2000 字，完整字数 {len(preview_text)})"
-                    )
-
-        if uploaded_files:
-            navigation_buttons(next_label="下一步", next_step=2)
+        navigation_buttons(next_label="下一步", next_step=2)
 
    # ---------- Step 2: 设置语言 & 风格 & 学科 ----------
     elif st.session_state["step"] == 2:
