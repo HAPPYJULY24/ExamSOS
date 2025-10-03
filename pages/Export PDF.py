@@ -22,6 +22,9 @@ user_text = st.text_area(
     placeholder="在这里粘贴 GPT 生成的笔记，确认后再导出为 PDF..."
 )
 
+# 文件名输入框
+custom_filename = st.text_input("导出文件名（不需要输入 .pdf）：", "")
+
 
 def save_to_pdf(text, filename="exported_notes.pdf"):
     """使用 reportlab 将文本导出为 PDF，支持简单 Markdown 格式"""
@@ -116,15 +119,24 @@ def save_to_pdf(text, filename="exported_notes.pdf"):
 # 生成 PDF
 if st.button("📑 生成 PDF"):
     if user_text.strip():
-        pdf_path = save_to_pdf(user_text, filename="exported_notes.pdf")
-        st.success("✅ PDF 已生成！")
+        # 确定文件名
+        if custom_filename.strip():
+            filename = f"{custom_filename.strip()}.pdf"
+        else:
+            # 自动用正文第一行作为文件名
+            first_line = user_text.split("\n")[0].strip()
+            safe_title = re.sub(r'[\\/*?:"<>|]', "_", first_line)  # 去掉非法字符
+            filename = f"{safe_title or 'exported_notes'}.pdf"
+
+        pdf_path = save_to_pdf(user_text, filename=filename)
+        st.success(f"✅ PDF 已生成！文件名：{filename}")
 
         # 下载按钮
         with open(pdf_path, "rb") as f:
             st.download_button(
                 label="⬇️ 下载 PDF",
                 data=f,
-                file_name="exported_notes.pdf",
+                file_name=filename,
                 mime="application/pdf"
             )
     else:
