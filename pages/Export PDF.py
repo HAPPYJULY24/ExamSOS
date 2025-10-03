@@ -60,12 +60,12 @@ def save_to_pdf(text, filename="exported_notes.pdf"):
     story = []
 
     # 添加标题
-    story.append(Paragraph("📑 ExamSOS 导出笔记", styles["CustomTitle"]))
+    story.append(Paragraph("ExamSOS 导出笔记", styles["CustomTitle"]))
     story.append(Spacer(1, 12))
 
     # 添加时间戳
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    story.append(Paragraph(f"生成时间：{timestamp}", styles["CustomBody"]))
+    story.append(Paragraph(f"生成时间: {timestamp}", styles["CustomBody"]))
     story.append(Spacer(1, 20))
 
     # 逐行写入正文（解析 Markdown）
