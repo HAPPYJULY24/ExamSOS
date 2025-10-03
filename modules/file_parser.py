@@ -38,10 +38,13 @@ def is_text_image(pil_img, threshold=0.05):
     return variance > threshold
 
 
-def extract_text_from_pptx_file(file_bytes):
-    """直接用 python-pptx 提取文字，同时对嵌入图片做 OCR（优化版）"""
+def extract_text_from_pptx_file(file_bytes, filename="unknown.pptx"):
+    """
+    直接用 python-pptx 提取文字，同时对嵌入图片做 OCR（优化版）
+    filename: 可选，方便在日志或调试中使用
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
-        pptx_path = os.path.join(tmpdir, "temp.pptx")
+        pptx_path = os.path.join(tmpdir, filename)
         with open(pptx_path, "wb") as f:
             f.write(file_bytes)
 
@@ -73,9 +76,10 @@ def extract_text_from_pptx_file(file_bytes):
                         slide_text.append(f"❌ Slide 图片 OCR 失败: {e}")
 
             if slide_text:
-                text.append(f"【Slide {i}】\n" + "\n".join(set(slide_text)))
+                text.append(f"【Slide {i} - {filename}】\n" + "\n".join(set(slide_text)))
 
         return "\n\n".join(text)
+
 
 
 def extract_text_from_file(uploaded_file):
