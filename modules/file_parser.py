@@ -1,10 +1,9 @@
 # modules/file_parser.py
 # 文件格式的转换，文件内容的提取
-#输入处理器（上传 → 提取文字）
+# 输入处理器（上传 → 提取文字）
 
 import os
 import tempfile
-import subprocess
 from pptx import Presentation
 from docx import Document
 import fitz  # PyMuPDF
@@ -12,38 +11,10 @@ import io
 import streamlit as st
 from PIL import Image
 import numpy as np
-
-# ⚡ 使用 easyocr 替换 pytesseract
 import easyocr
 
 # 初始化 OCR 引擎（中英文）
-OCR_READER = easyocr.Reader(['en', 'ch_sim'], gpu=False)  # gpu=True 如果服务器支持 GPU
-
-# ⚡ LibreOffice 路径
-LIBREOFFICE_PATH = r"C:\Program Files\LibreOffice\program\soffice.exe"
-
-
-def convert_ppt_to_pptx(input_path, output_dir):
-    """用 LibreOffice 把 .ppt 转换成 .pptx，返回新文件路径"""
-    try:
-        result = subprocess.run(
-            [LIBREOFFICE_PATH, "--headless", "--convert-to", "pptx", "--outdir", output_dir, input_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True
-        )
-        print("LibreOffice 输出：", result.stdout)
-        print("LibreOffice 错误：", result.stderr)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"❌ LibreOffice 转换失败: {e.stderr}")
-
-    base_name = os.path.splitext(os.path.basename(input_path))[0]
-    output_path = os.path.join(output_dir, base_name + ".pptx")
-    if not os.path.exists(output_path):
-        raise FileNotFoundError(f"❌ LibreOffice 没有生成 {output_path}")
-
-    return output_path
+OCR_READER = easyocr.Reader(['en', 'ch_sim'], gpu=False)  # 如果服务器支持 GPU，可改成 True
 
 
 def ocr_image(pil_img):
@@ -57,58 +28,33 @@ def ocr_image(pil_img):
 
 
 def extract_text_from_file(uploaded_file):
-    """根据文件类型提取纯文本（支持 PPT/PPTX/DOCX/PDF/TXT，全部带 OCR）"""
+    """根据文件类型提取纯文本（支持 PPTX/DOCX/PDF/TXT，全部带 OCR）"""
     filename = uploaded_file.name.lower()
 
     # 一次性读入内存
     file_bytes = uploaded_file.read()
     file_stream = io.BytesIO(file_bytes)
 
-    # -------- PPT / PPTX --------
-    if filename.endswith((".ppt", ".pptx")):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            file_path = os.path.join(tmpdir, os.path.basename(filename))
-            with open(file_path, "wb") as f:
-                f.write(file_bytes)
+    # -------- PPTX --------
+    if filename.endswith(".pptx"):
+        prs = Presentation(file_stream)
+        text = []
 
-            if filename.endswith(".ppt"):
-                try:
-                    pptx_path = convert_ppt_to_pptx(file_path, tmpdir)
-                except Exception as e:
-                    return f"❌ PPT 转换失败: {e}"
-            else:
-                pptx_path = file_path
+        for i, slide in enumerate(prs.slides, start=1):
+            slide_text = []
+            # 1️⃣ 直接提取文字
+            for shape in slide.shapes:
+                if hasattr(shape, "text") and shape.text.strip():
+                    slide_text.append(shape.text)
 
-            prs = Presentation(pptx_path)
-            text = []
+            # ⚠️ 这里只保留文字提取，不再强制做图片 OCR（性能更好）
+            if slide_text:
+                text.append(f"【Slide {i}】\n" + "\n".join(set(slide_text)))
 
-            for i, slide in enumerate(prs.slides, start=1):
-                slide_text = []
-                # 1️⃣ 直接提取文字
-                for shape in slide.shapes:
-                    if hasattr(shape, "text") and shape.text.strip():
-                        slide_text.append(shape.text)
+        return "\n\n".join(text)
 
-                # 2️⃣ 整个 slide 转图片做 OCR
-                img_path = os.path.join(tmpdir, f"slide_{i}.png")
-                try:
-                    # 用 libreoffice 转换 slide -> png
-                    subprocess.run(
-                        [LIBREOFFICE_PATH, "--headless", "--convert-to", "png", "--outdir", tmpdir, pptx_path],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-                    if os.path.exists(img_path):
-                        pil_img = Image.open(img_path)
-                        ocr_text = ocr_image(pil_img)
-                        if ocr_text:
-                            slide_text.append(ocr_text)
-                except Exception as e:
-                    slide_text.append(f"❌ Slide OCR 失败: {e}")
-
-                if slide_text:
-                    text.append(f"【Slide {i}】\n" + "\n".join(set(slide_text)))
-
-            return "\n\n".join(text)
+    elif filename.endswith(".ppt"):
+        return "❌ 不支持 .ppt 格式，请先在本地另存为 .pptx 再上传。"
 
     # -------- DOCX --------
     elif filename.endswith(".docx"):
@@ -138,6 +84,7 @@ def extract_text_from_file(uploaded_file):
             for page_num, page in enumerate(pdf_doc, start=1):
                 page_text = page.get_text("text").strip()
 
+                # OCR 每一页（可选：如果只需要文本，可以关掉 OCR 提升速度）
                 pix = page.get_pixmap()
                 img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                 ocr_text = ocr_image(img)
