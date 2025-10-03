@@ -2,13 +2,11 @@
 # 文件格式的转换，文件内容的提取
 # 输入处理器（上传 → 提取文字）
 
-import os
-import tempfile
+import io
+import streamlit as st
 from pptx import Presentation
 from docx import Document
 import fitz  # PyMuPDF
-import io
-import streamlit as st
 from PIL import Image
 import numpy as np
 import easyocr
@@ -42,31 +40,31 @@ def extract_text_from_file(uploaded_file):
 
         for i, slide in enumerate(prs.slides, start=1):
             slide_text = []
-            # 1️⃣ 直接提取文字
+            # 直接提取文字（去掉 OCR）
             for shape in slide.shapes:
                 if hasattr(shape, "text") and shape.text.strip():
                     slide_text.append(shape.text)
 
-            # ⚠️ 这里只保留文字提取，不再强制做图片 OCR（性能更好）
             if slide_text:
                 text.append(f"【Slide {i}】\n" + "\n".join(set(slide_text)))
 
         return "\n\n".join(text)
 
+    # -------- PPT（旧格式，不支持）--------
     elif filename.endswith(".ppt"):
-        return "❌ 不支持 .ppt 格式，请先在本地另存为 .pptx 再上传。"
+        return "❌ 暂不支持 .ppt 格式，请先在本地另存为 .pptx 再上传。"
 
     # -------- DOCX --------
     elif filename.endswith(".docx"):
         doc = Document(file_stream)
         text = []
 
-        # 1️⃣ 普通段落
+        # 段落文本
         for p in doc.paragraphs:
             if p.text.strip():
                 text.append(p.text)
 
-        # 2️⃣ 图片 OCR
+        # 图片 OCR
         for rel in doc.part.rels.values():
             if "image" in rel.target_ref:
                 image_data = rel.target_part.blob
@@ -84,7 +82,7 @@ def extract_text_from_file(uploaded_file):
             for page_num, page in enumerate(pdf_doc, start=1):
                 page_text = page.get_text("text").strip()
 
-                # OCR 每一页（可选：如果只需要文本，可以关掉 OCR 提升速度）
+                # OCR 每一页（如果 PDF 里有图片）
                 pix = page.get_pixmap()
                 img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                 ocr_text = ocr_image(img)
