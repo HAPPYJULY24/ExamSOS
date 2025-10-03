@@ -26,8 +26,21 @@ user_text = st.text_area(
 custom_filename = st.text_input("导出文件名（不需要输入 .pdf）：", "")
 
 
+def clean_text(text: str) -> str:
+    """
+    清理不需要导出的标记，例如 FILE: Document_1
+    """
+    # 去掉 FILE: Document_x 开头的行
+    text = re.sub(r"^FILE: Document_\d+\s*\n?", "", text, flags=re.MULTILINE)
+    return text
+
+
 def save_to_pdf(text, filename="exported_notes.pdf"):
     """使用 reportlab 将文本导出为 PDF，支持简单 Markdown 格式"""
+
+    # 在导出前清理
+    text = clean_text(text)
+
     # 输出目录
     output_dir = "exports"
     os.makedirs(output_dir, exist_ok=True)
