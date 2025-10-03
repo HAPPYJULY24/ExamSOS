@@ -14,35 +14,29 @@ import streamlit as st
 import easyocr
 
 # 初始化 OCR 引擎（中英文）
-OCR_READER = easyocr.Reader(['en', 'ch_sim'], gpu=False)  # gpu=True 如果服务器支持 GPU
+OCR_READER = easyocr.Reader(['en', 'ch_sim'], gpu=False)
 
 
 def ocr_image(pil_img):
-    """OCR 识别图片 -> 文字（使用 easyocr）"""
+    """OCR 识别图片 -> 文字"""
     try:
         img_np = np.array(pil_img.convert('RGB'))
         result = OCR_READER.readtext(img_np, detail=0)
         return "\n".join(result).strip()
-    except Exception as e:
-        return f"❌ OCR 识别失败: {e}"
+    except Exception:
+        return ""  # 永远返回 string，避免报错信息污染结果
 
 
 def is_text_image(pil_img, threshold=0.05):
-    """
-    简单判断图片是否可能包含文字
-    threshold: 亮度方差阈值，默认 0.05
-    """
+    """简单判断图片是否可能包含文字"""
     gray = pil_img.convert("L")
     stat = ImageStat.Stat(gray)
-    variance = stat.var[0] / 255**2  # 方差归一化
+    variance = stat.var[0] / 255**2
     return variance > threshold
 
 
 def extract_text_from_pptx_file(file_bytes, filename="unknown.pptx"):
-    """
-    直接用 python-pptx 提取文字，同时对嵌入图片做 OCR（优化版）
-    filename: 可选，方便在日志或调试中使用
-    """
+    """提取 PPTX 文本 + OCR 图片"""
     with tempfile.TemporaryDirectory() as tmpdir:
         pptx_path = os.path.join(tmpdir, filename)
         with open(pptx_path, "wb") as f:
@@ -54,7 +48,7 @@ def extract_text_from_pptx_file(file_bytes, filename="unknown.pptx"):
         for i, slide in enumerate(prs.slides, start=1):
             slide_text = []
 
-            # 1️⃣ 提取可编辑文字
+            # 提取可编辑文字
             for shape in slide.shapes:
                 if shape.has_text_frame:
                     for para in shape.text_frame.paragraphs:
@@ -62,9 +56,9 @@ def extract_text_from_pptx_file(file_bytes, filename="unknown.pptx"):
                         if para_text:
                             slide_text.append(para_text)
 
-            # 2️⃣ 对 slide 内图片做 OCR（优化：只对可能含文字的图片）
+            # 图片 OCR
             for shape in slide.shapes:
-                if shape.shape_type == 13:  # Picture 类型
+                if shape.shape_type == 13:  # Picture
                     try:
                         image = shape.image
                         pil_img = Image.open(io.BytesIO(image.blob))
@@ -72,32 +66,22 @@ def extract_text_from_pptx_file(file_bytes, filename="unknown.pptx"):
                             ocr_text = ocr_image(pil_img)
                             if ocr_text:
                                 slide_text.append(ocr_text)
-                    except Exception as e:
-                        slide_text.append(f"❌ Slide 图片 OCR 失败: {e}")
+                    except Exception:
+                        pass
 
             if slide_text:
                 text.append(f"【Slide {i} - {filename}】\n" + "\n".join(set(slide_text)))
 
-        return "\n\n".join(text)
-
+        return "\n\n".join(text) if text else "（未提取到有效文本）"
 
 
 def extract_text_from_file(uploaded_file, filename=None):
-    """
-    根据文件类型提取纯文本（支持 PPTX/DOCX/PDF/TXT，全部带 OCR）
-    uploaded_file: 文件对象或 io.BytesIO
-    filename: 可选，用于指定文件名（方便缓存/日志）
-    """
-    if filename is None:
-        # 尝试从文件对象获取 name 属性
-        filename = getattr(uploaded_file, "name", "unknown").lower()
-    else:
-        filename = filename.lower()
+    """根据文件类型提取纯文本（支持 PPTX/DOCX/PDF/TXT，全部带 OCR）"""
+    filename = (filename or getattr(uploaded_file, "name", "unknown")).lower()
 
-    # 如果是 BytesIO，需要 reset
+    # 确保 bytes 不会被读空
     if hasattr(uploaded_file, "seek"):
         uploaded_file.seek(0)
-
     file_bytes = uploaded_file.read() if hasattr(uploaded_file, "read") else uploaded_file
     file_stream = io.BytesIO(file_bytes)
 
@@ -117,14 +101,16 @@ def extract_text_from_file(uploaded_file, filename=None):
         # 图片 OCR
         for rel in doc.part.rels.values():
             if hasattr(rel, "target_ref") and "image" in rel.target_ref:
-                image_data = rel.target_part.blob
-                pil_img = Image.open(io.BytesIO(image_data))
-                ocr_text = ocr_image(pil_img)
-                if ocr_text:
-                    text.append(ocr_text)
+                try:
+                    image_data = rel.target_part.blob
+                    pil_img = Image.open(io.BytesIO(image_data))
+                    ocr_text = ocr_image(pil_img)
+                    if ocr_text:
+                        text.append(ocr_text)
+                except Exception:
+                    pass
 
-        return "\n".join(text)
-
+        return "\n".join(text) if text else "（未提取到有效文本）"
 
     # -------- PDF --------
     elif filename.endswith(".pdf"):
@@ -134,33 +120,35 @@ def extract_text_from_file(uploaded_file, filename=None):
                 page_text = page.get_text("text").strip()
 
                 ocr_text = ""
-                if not page_text or len(page_text) < 30:  # 页文字过少才 OCR
+                if not page_text or len(page_text) < 30:
                     pix = page.get_pixmap()
                     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                     ocr_text = ocr_image(img)
 
-                combined_parts = set()
+                combined_parts = []
                 if page_text:
-                    combined_parts.add(page_text)
+                    combined_parts.append(page_text)
                 if ocr_text:
-                    combined_parts.add(ocr_text)
+                    combined_parts.append(ocr_text)
 
-                combined_text = "\n".join(combined_parts)
-                text.append(f"【第 {page_num} 页 - {filename}】\n{combined_text}")
+                page_content = "\n".join(combined_parts).strip()
+                text.append(f"【第 {page_num} 页 - {filename}】\n{page_content}")
 
-        return "\n\n".join(text)
+        return "\n\n".join(text) if text else "（未提取到有效文本）"
 
     # -------- TXT --------
     elif filename.endswith(".txt"):
-        return file_bytes.decode("utf-8", errors="ignore")
+        try:
+            return file_bytes.decode("utf-8", errors="ignore").strip() or "（未提取到有效文本）"
+        except Exception:
+            return "（未提取到有效文本）"
 
     else:
         return f"❌ 不支持的文件格式: {filename}"
 
 
-
 def preview_files(uploaded_files):
-    """只展示文件名，不显示内容"""
+    """只展示文件名"""
     for uf in uploaded_files:
         st.write(f"✅ {uf.name}")
 
@@ -169,11 +157,11 @@ def merge_files_text(uploaded_files):
     """把多个文件内容拼接成一个大字符串，带文件名分隔符"""
     all_texts = []
     for idx, uploaded_file in enumerate(uploaded_files, start=1):
-        uploaded_file.seek(0)  # reset
+        uploaded_file.seek(0)
         text = extract_text_from_file(uploaded_file)
 
         print(f"======= {uploaded_file.name} 内容预览 =======")
-        print(text[:1000])
+        print(text[:500])  # 限制调试输出，避免日志过大
 
         labeled_text = f"\n======= 文件 {idx}: {uploaded_file.name} =======\n{text}\n"
         all_texts.append(labeled_text)

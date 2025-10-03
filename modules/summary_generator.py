@@ -56,7 +56,7 @@ def navigation_buttons(prev_label=None, next_label=None, prev_step=None, next_st
             st.rerun()
 
 
-# ================= 主程序入口 =================
+# ---------- 主程序入口（修正版 run） ----------
 def run():
     st.title("📘 ExamSOS - MVP 测试版")
 
@@ -65,6 +65,9 @@ def run():
         st.session_state["step"] = 1
     if "summary" not in st.session_state:
         st.session_state["summary"] = ""
+
+    # 保证 uploaded_files 在函数内始终有定义（从 session 读取）
+    uploaded_files = st.session_state.get("uploaded_files", None)
 
     # ---------- 左上角返回首页 & 重新开始 ----------
     col_back, col_restart, _ = st.columns([1, 1, 8])
@@ -77,7 +80,7 @@ def run():
             for key in ["uploaded_files", "summary", "step",
                         "bilingual", "target_lang", "style",
                         "pending_new_text", "pending_selected_text",
-                        "pending_user_request", "show_pending"]:
+                        "pending_user_request", "show_pending", "parsed_texts"]:
                 st.session_state.pop(key, None)
             st.session_state["step"] = 1
             st.rerun()
@@ -86,47 +89,33 @@ def run():
 
     # ---------- 步骤显示 ----------
     steps = ["📂 上传文件", "🌐 设置语言 & 风格", "📑 提取重点", "✏️ 修改与导出"]
-
-    # 限制 step 在合法范围内
     current_step = st.session_state.get("step", 1)
     current_step = max(1, min(current_step, len(steps)))
-
-    # 计算进度
     progress = int((current_step - 1) / (len(steps) - 1) * 100)
     st.progress(progress)
-
-    # 显示当前进度文字
     st.markdown(f"### 当前进度：{steps[current_step - 1]}")
 
-   
-    # ---------- Step 1: 上传文件 ----------
-    if st.session_state.get("step", 1) == 1:   # ✅ 防止 KeyError
-        uploaded_files = st.file_uploader(
-            "上传文件 (支持 PDF / DOCX / TXT / PPTX )",
-            accept_multiple_files=True,
-            type=["pdf", "docx", "txt", "pptx"]
-         )
-
-    # ================= 性能优化部分 =================
+    # ================= 性能优化部分（并行 + 缓存函数） =================
     from concurrent.futures import ThreadPoolExecutor
 
     @st.cache_data(show_spinner=False)
     def cached_extract(file_bytes, file_name):
-        """缓存解析结果（基于文件字节+文件名做唯一 key）"""
+        """缓存解析结果：以 (bytes, filename) 为 key"""
         import io
         from modules import file_parser
         return file_parser.extract_text_from_file(io.BytesIO(file_bytes), file_name)
 
     def extract_texts_parallel(files):
-        """并行解析多个文件"""
+        """并行解析多个 Streamlit UploadedFile 列表（返回 list[str]）"""
         results = []
         with ThreadPoolExecutor(max_workers=4) as executor:
             futures = []
             for f in files:
+                # f is streamlit.uploaded_file.UploadedFile
                 futures.append(
                     executor.submit(
                         cached_extract,
-                        f.getvalue(),  # 缓存基于文件内容
+                        f.getvalue(),  # bytes
                         f.name
                     )
                 )
@@ -135,31 +124,42 @@ def run():
         return results
     # =================================================
 
-    if uploaded_files:
-        st.session_state["uploaded_files"] = uploaded_files
+    # ---------- Step 1: 上传文件 ----------
+    if current_step == 1:
+        # 使用不同变量接收上传组件，避免未执行分支时污染 uploaded_files 局部变量
+        new_uploads = st.file_uploader(
+            "上传文件 (支持 PDF / DOCX / TXT / PPTX )",
+            accept_multiple_files=True,
+            type=["pdf", "docx", "txt", "pptx"]
+        )
 
-        # ✅ 如果没解析过，就解析一次（并行 + 缓存）
-        if "parsed_texts" not in st.session_state or not st.session_state["parsed_texts"]:
+        # 用户上传了新文件：写入 session 并触发解析（清理旧解析）
+        if new_uploads:
+            st.session_state["uploaded_files"] = new_uploads
+            uploaded_files = new_uploads  # 更新当前函数作用域的引用
+            # 清掉旧解析结果，确保按最新文件解析
+            st.session_state.pop("parsed_texts", None)
+
+            # 立即解析（并行 + 缓存）
             with st.spinner("⏳ 正在解析文件..."):
-                st.session_state["parsed_texts"] = extract_texts_parallel(uploaded_files)
+                st.session_state["parsed_texts"] = extract_texts_parallel(new_uploads)
             st.success("✅ 文件解析完成！")
 
-        # 展示预览
-        for uf, preview_text in zip(uploaded_files, st.session_state["parsed_texts"]):
-            st.subheader(f"📖 {uf.name} - 内容预览")
-            st.caption(f"提取总字数: {len(preview_text)}")
-            print(f"======= {uf.name} 提取完成，总字数 {len(preview_text)} =======")
-
-            st.text_area(
-                "内容 (预览，最多 2000 字)",
-                preview_text[:2000],
-                height=300,
-                key=f"preview_{uf.name}"
-            )
-            if len(preview_text) > 2000:
-                st.warning(
-                    f"⚠️ 内容过长，已截断展示 (仅显示前 2000 字，完整字数 {len(preview_text)})"
+        # 如果 session 中已有 parsed_texts（来自之前上传），也显示预览
+        if uploaded_files and st.session_state.get("parsed_texts"):
+            for uf, preview_text in zip(uploaded_files, st.session_state["parsed_texts"]):
+                st.subheader(f"📖 {uf.name} - 内容预览")
+                st.caption(f"提取总字数: {len(preview_text)}")
+                st.text_area(
+                    "内容 (预览，最多 2000 字)",
+                    preview_text[:2000],
+                    height=300,
+                    key=f"preview_{uf.name}"
                 )
+                if len(preview_text) > 2000:
+                    st.warning(
+                        f"⚠️ 内容过长，已截断展示 (仅显示前 2000 字，完整字数 {len(preview_text)})"
+                    )
 
         navigation_buttons(next_label="下一步", next_step=2)
 
@@ -219,9 +219,10 @@ def run():
         navigation_buttons("上一步", "下一步", prev_step=1, next_step=3)
         
     # ---------- Step 3: 提取重点 ----------
-    elif st.session_state.get("step") == 3:
-        parsed_texts = st.session_state.get("parsed_texts", [])
+    elif current_step == 3:
+        # 从 session 读取（始终优先使用 session 中的持久值）
         uploaded_files = st.session_state.get("uploaded_files", [])
+        parsed_texts = st.session_state.get("parsed_texts", [])
 
         if parsed_texts and uploaded_files:
             st.subheader("📂 文件预览")
@@ -231,7 +232,6 @@ def run():
             with col_extract:
                 if st.button("📑 提取重点", key="extract_step3"):
                     with st.spinner("AI 正在分析中..."):
-                        # ✅ 传入字符串列表，不再传文件
                         summary = extractor.extract_summary(
                             texts=parsed_texts,
                             api_key=OPENAI_API_KEY,
@@ -251,7 +251,7 @@ def run():
                     st.session_state["step"] = 2
                     st.rerun()
         else:
-            st.warning("⚠️ 请先上传文件！")
+            st.warning("⚠️ 请先上传文件并完成解析！")
 
     # ---------- Step 4: 修改与导出 ----------
     elif st.session_state["step"] == 4:

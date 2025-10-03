@@ -1,32 +1,30 @@
 # config.py
-# 负责加载配置，包括本地 .env 和 Streamlit Secrets / 系统环境变量
-
 import os
 from dotenv import load_dotenv
 
 # 尝试加载本地 .env（仅本地调试时有用）
 load_dotenv()
 
-# ========== 优先级 ==========
-# 1. Streamlit Secrets
-# 2. 系统环境变量
-# 3. 本地 .env
-# ===========================
+OPENAI_API_KEY = None
+key_source = None
+
 try:
     import streamlit as st
-    if "OPENAI_API_KEY" in st.secrets:
+    # ✅ 先判断 st.secrets 是否真的有东西
+    if hasattr(st, "secrets") and "OPENAI_API_KEY" in st.secrets:
         OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
         key_source = "Streamlit Secrets"
-    else:
-        OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-        key_source = "os.environ"
-except ImportError:
-    # 如果不是在 Streamlit 环境中运行
-    OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+except Exception:
+    # 本地环境直接跳过
+    pass
+
+# 如果没取到，就用环境变量
+if not OPENAI_API_KEY:
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     key_source = "os.environ"
 
 # Anthropic Key（可选）
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 # ===== 校验 API Key =====
 if not OPENAI_API_KEY:
@@ -37,6 +35,5 @@ print(f"✅ 正在使用 {key_source} 中的 OPENAI_API_KEY")
 print(f"当前读取到的 Key 长度：{len(OPENAI_API_KEY)}")
 print(f"前 5 位：{OPENAI_API_KEY[:5]}...")
 
-# 默认模型（可修改为 gpt-4o-mini / gpt-4o / gpt-3.5-turbo）
+# 默认模型
 DEFAULT_MODEL = "gpt-4o-mini"
-
