@@ -3,7 +3,6 @@
 import streamlit as st
 from modules import file_parser, extractor
 from config import OPENAI_API_KEY
-import pyperclip
 import openai
 from langdetect import detect
 

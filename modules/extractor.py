@@ -2,7 +2,6 @@
 # AI 提取重点 (支持语言检测 & 三大模式 + 学科类型识别 + 分块处理)
 
 from openai import OpenAI
-from modules import file_handler
 from config import DEFAULT_MODEL, OPENAI_API_KEY
 from langdetect import detect
 import re
