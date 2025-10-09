@@ -42,7 +42,6 @@ langdetect
 # 🗄️ 数据库 / ORM
 # =======================
 SQLAlchemy>=2.0.0   # ✅ 你的 routes_local 和 models.py 都在用
-sqlite3             # ✅ 虽为内置库，但声明能方便云部署环境识别
 
 # =======================
 # 🧾 PDF 生成
