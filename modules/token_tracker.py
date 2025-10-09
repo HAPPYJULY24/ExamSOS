@@ -5,7 +5,7 @@ import datetime
 import os
 import json
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "..", "system.db")
+from modules.utils.path_helper import DB_PATH
 
 def log_token_usage(user_id, model, usage, request_id=None, remark=None):
     """

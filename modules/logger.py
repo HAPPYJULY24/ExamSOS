@@ -5,9 +5,10 @@ import sqlite3
 import datetime
 import json
 import os
+from modules.utils.path_helper import DB_PATH
 
 # === 数据库路径 ===
-DB_PATH = os.path.join(os.path.dirname(__file__), "..", "database", "system.db")
+
 VALID_STATUS = {'work', 'down', 'change', 'warning', 'done', 'success', 'info'}
 
 

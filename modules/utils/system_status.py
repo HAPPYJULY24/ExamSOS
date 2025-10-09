@@ -4,9 +4,7 @@
 import sqlite3
 import datetime
 import os
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-DB_PATH = os.path.join(BASE_DIR, "database", "system.db")
+from modules.utils.path_helper import DB_PATH
 
 def update_module_status(module_name: str, status: str, message: str = None, error_count: int = None):
     """
