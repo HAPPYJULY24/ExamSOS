@@ -4,14 +4,22 @@
 import streamlit as st
 import os
 import re
+from datetime import datetime
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
-from datetime import datetime
+
+from modules.utils.system_status import update_module_status   # ✅ 导入状态更新函数
 
 st.set_page_config(page_title="PDF 导出", layout="wide")
 st.title("📑 PDF 导出工具")
+
+# === 汇报模块状态 ===
+try:
+    update_module_status("export_pdf", "active", "PDF 导出页面已加载正常")
+except Exception as e:
+    st.warning(f"⚠️ 状态上报失败: {e}")
 
 st.write("请将你想导出的内容粘贴到下面输入框：")
 
@@ -132,25 +140,43 @@ def save_to_pdf(text, filename="exported_notes.pdf"):
 # 生成 PDF
 if st.button("📑 生成 PDF"):
     if user_text.strip():
-        # 确定文件名
-        if custom_filename.strip():
-            filename = f"{custom_filename.strip()}.pdf"
-        else:
-            # 自动用正文第一行作为文件名
-            first_line = user_text.split("\n")[0].strip()
-            safe_title = re.sub(r'[\\/*?:"<>|]', "_", first_line)  # 去掉非法字符
-            filename = f"{safe_title or 'exported_notes'}.pdf"
+        # === 状态汇报：模块正在工作 ===
+        update_module_status("export_pdf", "working", "正在生成 PDF 文件...")
 
-        pdf_path = save_to_pdf(user_text, filename=filename)
-        st.success(f"✅ PDF 已生成！文件名：{filename}")
+        try:
+            # 确定文件名
+            if custom_filename.strip():
+                filename = f"{custom_filename.strip()}.pdf"
+            else:
+                # 自动用正文第一行作为文件名
+                first_line = user_text.split("\n")[0].strip()
+                safe_title = re.sub(r'[\\/*?:"<>|]', "_", first_line)  # 去掉非法字符
+                filename = f"{safe_title or 'exported_notes'}.pdf"
 
-        # 下载按钮
-        with open(pdf_path, "rb") as f:
-            st.download_button(
-                label="⬇️ 下载 PDF",
-                data=f,
-                file_name=filename,
-                mime="application/pdf"
-            )
+            # 执行生成 PDF
+            pdf_path = save_to_pdf(user_text, filename=filename)
+
+            # 成功反馈
+            st.success(f"✅ PDF 已生成！文件名：{filename}")
+
+            # === 状态汇报：生成成功 ===
+            update_module_status("export_pdf", "active", f"PDF 生成成功：{filename}")
+
+            # 下载按钮
+            with open(pdf_path, "rb") as f:
+                st.download_button(
+                    label="⬇️ 下载 PDF",
+                    data=f,
+                    file_name=filename,
+                    mime="application/pdf"
+                )
+
+        except Exception as e:
+            # === 状态汇报：模块异常 ===
+            update_module_status("export_pdf", "error", f"PDF 生成失败: {e}")
+            st.error(f"❌ 导出失败: {e}")
+
     else:
+        # 用户没输入内容的情况
         st.warning("⚠️ 请输入内容再生成 PDF")
+        update_module_status("export_pdf", "warning", "未输入内容，无法生成 PDF")

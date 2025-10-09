@@ -5,6 +5,16 @@ from modules import file_parser, extractor
 from config import OPENAI_API_KEY
 import openai
 from langdetect import detect
+from modules.logger import log_event
+from modules.auth.user_memory import record_user_edit
+
+# === 模块健康状态上报 ===
+from modules.utils.system_status import update_module_status
+
+try:
+    update_module_status("summary_generator", "active", "模块加载成功")
+except Exception as e:
+    update_module_status("summary_generator", "error", str(e))
 
 # ================= 原有导航栏函数 =================
 def navigation_buttons(prev_label=None, next_label=None, prev_step=None, next_step=None):
@@ -134,15 +144,20 @@ def run():
 
         # 用户上传了新文件：写入 session 并触发解析（清理旧解析）
         if new_uploads:
-            st.session_state["uploaded_files"] = new_uploads
-            uploaded_files = new_uploads  # 更新当前函数作用域的引用
-            # 清掉旧解析结果，确保按最新文件解析
-            st.session_state.pop("parsed_texts", None)
+            try:
+                log_event("summary_generator", "INFO", "work", "用户上传文件", meta={"count": len(new_uploads)})
+                st.session_state["uploaded_files"] = new_uploads
+                uploaded_files = new_uploads  
+                st.session_state.pop("parsed_texts", None)
 
-            # 立即解析（并行 + 缓存）
-            with st.spinner("⏳ 正在解析文件..."):
-                st.session_state["parsed_texts"] = extract_texts_parallel(new_uploads)
-            st.success("✅ 文件解析完成！")
+                with st.spinner("⏳ 正在解析文件..."):
+                    st.session_state["parsed_texts"] = extract_texts_parallel(new_uploads)
+                st.success("✅ 文件解析完成！")
+
+                log_event("summary_generator", "INFO", "work", "文件解析成功", meta={"files": [f.name for f in new_uploads]})
+            except Exception as e:
+                log_event("summary_generator", "ERROR", "down", "文件解析失败", remark=str(e), reason="文件解析异常")
+                st.error(f"❌ 文件解析出错：{e}")
 
         # 如果 session 中已有 parsed_texts（来自之前上传），也显示预览
         if uploaded_files and st.session_state.get("parsed_texts"):
@@ -162,14 +177,26 @@ def run():
 
         navigation_buttons(next_label="下一步", next_step=2)
 
-   # ---------- Step 2: 设置语言 & 风格 & 学科 ----------
+      # ---------- Step 2: 设置语言 & 风格 & 学科 ----------
     elif st.session_state["step"] == 2:
+        # ========== 新增：尝试加载用户历史偏好 ==========
+        user = st.session_state.get("user")
+        if user and "id" in user:
+            from modules.auth.user_memory import load_user_memory
+            prefs = load_user_memory(user["id"])
+            if prefs:
+                st.session_state.update(prefs)
+                log_event("summary_generator", "INFO", "load", "用户偏好已加载", meta=prefs)
+
+        # ========== 表单主体 ==========
         st.subheader("🎯 学习目标")
         study_goal = st.radio(
             "选择你希望生成的笔记用途：",
-            ["详细模式（白话+例子，适合打基础）", 
-            "考前笔记（简短+应试技巧）", 
-            "客制化（自定义需求）"],
+            [
+                "详细模式（白话+例子，适合打基础）",
+                "考前笔记（简短+应试技巧）",
+                "客制化（自定义需求）"
+            ],
             index=0,
             key="goal_radio"
         )
@@ -195,8 +222,14 @@ def run():
         st.subheader("📚 学科类别")
         subject = st.selectbox(
             "请选择资料所属学科：",
-            ["未指定", "文科（历史/政治/文学）", "理科（数学/物理/化学）", "工程/计算机（代码/系统设计/电子）",
-            "医学/生物", "商科/管理"]
+            [
+                "未指定",
+                "文科（历史/政治/文学）",
+                "理科（数学/物理/化学）",
+                "工程/计算机（代码/系统设计/电子）",
+                "医学/生物",
+                "商科/管理"
+            ]
         )
         st.session_state["subject"] = subject
 
@@ -215,7 +248,42 @@ def run():
         exam_q = st.checkbox("需要生成模拟考题（附参考答案）", value=False)
         st.session_state["need_exam_questions"] = exam_q
 
-        navigation_buttons("上一步", "下一步", prev_step=1, next_step=3)
+        # ======== 自定义导航按钮逻辑 ========
+        col_prev, col_next = st.columns(2)
+
+        with col_prev:
+            if st.button("⬅️ 上一步", key="prev_step2"):
+                st.session_state["step"] = 1
+                st.rerun()
+
+        with col_next:
+            if st.button("➡️ 下一步", key="next_step3"):
+                # ======== 保存用户偏好到数据库 ========
+                if user and "id" in user:
+                    from modules.auth.user_memory import save_user_memory
+
+                    prefs = {
+                        "study_goal": study_goal,
+                        "style": st.session_state["style"],
+                        "custom_instruction": custom_instruction,
+                        "subject": subject,
+                        "bilingual": bilingual,
+                        "target_lang": st.session_state["target_lang"],
+                        "need_exam_questions": exam_q
+                    }
+
+                    success = save_user_memory(user["id"], prefs)
+                    if success:
+                        log_event("summary_generator", "INFO", "save", "用户偏好已保存", meta=prefs)
+                    else:
+                        log_event("summary_generator", "ERROR", "save", "偏好保存失败", meta=prefs)
+                else:
+                    log_event("summary_generator", "WARNING", "skip", "未登录用户跳过偏好保存")
+
+                # ======== 进入下一步 ========
+                st.session_state["step"] = 3
+                st.rerun()
+
         
     # ---------- Step 3: 提取重点 ----------
     elif current_step == 3:
@@ -230,21 +298,27 @@ def run():
             col_extract, col_back = st.columns([1, 1])
             with col_extract:
                 if st.button("📑 提取重点", key="extract_step3"):
-                    with st.spinner("AI 正在分析中..."):
-                        summary = extractor.extract_summary(
-                            texts=parsed_texts,
-                            api_key=OPENAI_API_KEY,
-                            bilingual=st.session_state.get("bilingual", False),
-                            target_lang=st.session_state.get("target_lang", "zh"),
-                            mode=st.session_state.get("style", "default"),
-                            generate_mock=st.session_state.get("need_exam_questions", False),
-                            custom_instruction=st.session_state.get("custom_instruction")
-                        )
-                    if summary.strip():
-                        st.session_state["summary"] = summary
-                        st.success("✅ 提取完成！")
-                        st.session_state["step"] = 4
-                        st.rerun()
+                    log_event("summary_generator", "INFO", "work", "AI提取开始")
+                    try:
+                        with st.spinner("AI 正在分析中..."):
+                            summary = extractor.extract_summary(
+                                texts=parsed_texts,
+                                api_key=OPENAI_API_KEY,
+                                bilingual=st.session_state.get("bilingual", False),
+                                target_lang=st.session_state.get("target_lang", "zh"),
+                                mode=st.session_state.get("style", "default"),
+                                generate_mock=st.session_state.get("need_exam_questions", False),
+                                custom_instruction=st.session_state.get("custom_instruction")
+                            )
+                            if summary.strip():
+                                st.session_state["summary"] = summary
+                                st.success("✅ 提取完成！")
+                                st.session_state["step"] = 4
+                                log_event("summary_generator", "INFO", "work", "AI提取完成")
+                                st.rerun()
+                    except Exception as e:
+                        log_event("summary_generator", "ERROR", "down", "AI提取失败", remark=str(e), reason="模型调用失败")
+                        st.error(f"❌ AI 提取失败：{e}")
             with col_back:
                 if st.button("⬅️ 上一步", key="prev_step3"):
                     st.session_state["step"] = 2
@@ -252,30 +326,34 @@ def run():
         else:
             st.warning("⚠️ 请先上传文件并完成解析！")
 
-    # ---------- Step 4: 修改与导出 ----------
+# ---------- Step 4: 修改与导出 ----------
     elif st.session_state["step"] == 4:
         st.subheader("📖 提取结果")
 
         summary_text = st.session_state.get("summary", "")
 
         if summary_text.strip():
-            # ✅ 用 st.code 显示结果，自带复制按钮
+            # ✅ 显示生成的总结内容
             st.code(summary_text, language="text")
             st.caption("⬆️ 点击右上角的 📋 按钮即可复制内容")
 
             st.markdown("---")
             st.subheader("✏️ 局部修改")
+
+            # ======== 用户输入修改请求 ========
             selected_text = st.text_area(
                 "请输入你想修改的片段（从上面复制过来）",
                 placeholder="粘贴需要调整的部分...",
                 key="selected_text_area"
             )
+
             user_request = st.text_input(
                 "请输入修改要求",
                 placeholder="例如：翻译成英文 / 解释更详细 / 用表格总结",
                 key="user_request_input"
             )
 
+            # ======== 提交修改请求 ========
             if st.button("提交修改", key="submit_modification"):
                 if not selected_text.strip() or not user_request.strip():
                     st.warning("⚠️ 请先粘贴片段并输入修改要求")
@@ -285,16 +363,15 @@ def run():
                     except:
                         lang = "en"
 
-                    if lang == "en":
-                        lang_instruction = "Please make sure the output remains in English."
-                    elif lang.startswith("zh"):
-                        lang_instruction = "请确保输出保持为中文。"
-                    else:
-                        lang_instruction = "Keep the same language as the original text."
+                    lang_instruction = {
+                        "en": "Please make sure the output remains in English.",
+                        "zh": "请确保输出保持为中文。"
+                    }.get(lang[:2], "Keep the same language as the original text.")
 
                     with st.spinner("AI 正在修改中..."):
-                        client = openai.OpenAI(api_key=OPENAI_API_KEY)
-                        prompt = f"""以下是文档中的一个片段，请根据用户的需求进行修改。
+                        try:
+                            client = openai.OpenAI(api_key=OPENAI_API_KEY)
+                            prompt = f"""以下是文档中的一个片段，请根据用户的需求进行修改。
     注意：保持原文片段的语言风格不变。
 
     原文片段：
@@ -307,55 +384,100 @@ def run():
 
     请输出修改后的结果：
     """
-                        response = client.chat.completions.create(
-                            model="gpt-4o-mini",
-                            messages=[{"role": "user", "content": prompt}]
-                        )
-                        new_text = response.choices[0].message.content.strip()
+                            response = client.chat.completions.create(
+                                model="gpt-4o-mini",
+                                messages=[{"role": "user", "content": prompt}]
+                            )
+                            new_text = response.choices[0].message.content.strip()
 
-                    st.session_state["pending_new_text"] = new_text
-                    st.session_state["pending_selected_text"] = selected_text
-                    st.session_state["pending_user_request"] = user_request
-                    st.session_state["show_pending"] = True
-                    st.rerun()
+                            # ======== 保存修改结果到 session ========
+                            st.session_state["pending_original"] = selected_text
+                            st.session_state["pending_new"] = new_text
+                            st.session_state["pending_request"] = user_request
+                            st.session_state["show_pending"] = True
 
+                            log_event(
+                                "summary_generator", "INFO", "change",
+                                "AI 修改完成",
+                                meta={"request": user_request, "lang": lang}
+                            )
+                            st.rerun()
+
+                        except Exception as e:
+                            log_event(
+                                "summary_generator", "ERROR", "down",
+                                "AI 修改失败",
+                                remark=str(e),
+                                reason="模型调用异常"
+                            )
+                            st.error(f"❌ AI 修改失败：{e}")
+
+            # ======== 显示修改对比结果 ========
             if st.session_state.get("show_pending"):
                 st.markdown("### 🔍 修改对比结果")
                 col1, col2 = st.columns(2)
+
                 with col1:
                     st.subheader("原文片段")
-                    st.text_area("原文", st.session_state.get("pending_selected_text", ""), height=200, key="pending_original")
+                    st.text_area(
+                        "原文",
+                        st.session_state.get("pending_original", ""),
+                        height=200,
+                        key="pending_original_text"
+                    )
+
                 with col2:
                     st.subheader("修改后")
-                    st.text_area("修改后", st.session_state.get("pending_new_text", ""), height=200, key="pending_new")
+                    st.text_area(
+                        "修改后",
+                        st.session_state.get("pending_new", ""),
+                        height=200,
+                        key="pending_new_text"
+                    )
 
-                col1, col2 = st.columns(2)
-                with col1:
+                # ======== 确认或取消修改 ========
+                col_apply, col_cancel = st.columns(2)
+
+                with col_apply:
                     if st.button("✅ 应用修改", key="apply_pending"):
-                        pending_sel = st.session_state.get("pending_selected_text")
-                        pending_new = st.session_state.get("pending_new_text")
-                        if pending_sel and pending_sel in st.session_state["summary"]:
-                            st.session_state["summary"] = st.session_state["summary"].replace(pending_sel, pending_new, 1)
-                            st.session_state.pop("pending_new_text", None)
-                            st.session_state.pop("pending_selected_text", None)
-                            st.session_state.pop("pending_user_request", None)
-                            st.session_state["show_pending"] = False
+                        original = st.session_state.get("pending_original")
+                        new = st.session_state.get("pending_new")
+                        request = st.session_state.get("pending_request")
+
+                        if original and original in st.session_state["summary"]:
+                            st.session_state["summary"] = st.session_state["summary"].replace(original, new, 1)
+
+                            # ✅✅✅ 新增：记录用户修改行为（保存修改习惯）
+                            user_id = st.session_state.get("user", {}).get("id")
+                            if user_id:
+                                record_user_edit(user_id, original, new, request)
+
+                            log_event(
+                                "summary_generator", "INFO", "change",
+                                "用户应用修改",
+                                meta={"request": request}
+                            )
+
+                            # 清理状态
+                            for k in ["pending_original", "pending_new", "pending_request", "show_pending"]:
+                                st.session_state.pop(k, None)
                             st.success("✅ 修改已应用！")
                             st.rerun()
                         else:
                             st.warning("⚠️ 未能在原文中找到待替换的片段，可能已被修改或不完全匹配。")
-                with col2:
+
+                with col_cancel:
                     if st.button("❌ 取消修改", key="cancel_pending"):
-                        st.session_state.pop("pending_new_text", None)
-                        st.session_state.pop("pending_selected_text", None)
-                        st.session_state.pop("pending_user_request", None)
-                        st.session_state["show_pending"] = False
+                        for k in ["pending_original", "pending_new", "pending_request", "show_pending"]:
+                            st.session_state.pop(k, None)
+                        log_event("summary_generator", "INFO", "work", "用户取消修改")
                         st.info("已取消修改。")
                         st.rerun()
 
         else:
             st.info("⚠️ 暂无内容，请先生成总结。")
 
+        # ======== 底部导航按钮 ========
         navigation_buttons("上一步", None, prev_step=3)
 
 # --------- 主入口 ---------
