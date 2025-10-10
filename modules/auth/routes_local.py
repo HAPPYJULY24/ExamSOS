@@ -1,19 +1,25 @@
 # modules/auth/routes_local.py
-#本地登入与注册模块
+# 本地登录与注册模块
 
 import os
 import streamlit as st
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from modules.auth.models import Base, User
-from modules.auth.utils import hash_password, verify_password, create_access_token
 from datetime import datetime, timedelta
 
-# ---------- 数据库配置 ----------
-DB_PATH = r"D:\Personal\Project\Exam SOS\ExamSOS System\database\user.db"
-os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+from modules.auth.models import Base, User, UserSession
+from modules.auth.utils import hash_password, verify_password, create_access_token
+from modules.utils.path_helper import USER_DB  # ✅ 统一从 path_helper 获取数据库路径
 
-engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
+# ---------- 数据库配置 ----------
+# ✅ 修复语法错误：os.makedirs() 少了一个右括号
+os.makedirs(os.path.dirname(USER_DB), exist_ok=True)
+
+# ✅ 使用统一的数据库引擎配置
+engine = create_engine(
+    f"sqlite:///{USER_DB}",
+    connect_args={"check_same_thread": False}
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # ---------- 初始化数据库 ----------
@@ -39,7 +45,9 @@ def register_user(username: str, email: str, password: str):
         db.add(new_user)
         db.commit()
         db.refresh(new_user)
+
         return {"success": True, "message": "注册成功", "user_id": new_user.id}
+
     except Exception as e:
         db.rollback()
         return {"success": False, "message": f"注册失败: {e}"}
@@ -61,12 +69,11 @@ def authenticate_user(email: str, password: str):
         if not verify_password(password, user.password_hash):
             return {"error": "密码错误"}
 
-        # ✅ 成功逻辑
+        # ✅ 成功登录逻辑
         user.last_login = datetime.utcnow()
         token_data = {"user_id": user.id, "username": user.username}
         access_token = create_access_token(token_data, timedelta(hours=1))
 
-        from modules.auth.models import UserSession
         new_session = UserSession(
             user_id=user.id,
             access_token=access_token,
@@ -77,14 +84,15 @@ def authenticate_user(email: str, password: str):
         db.add(new_session)
         db.commit()
 
-        # ✅ 同步写入 Streamlit Session
-        st.session_state["is_authenticated"] = True
-        st.session_state["user_id"] = user.id
-        st.session_state["username"] = user.username
-        st.session_state["role"] = user.role
-        st.session_state["access_token"] = access_token
+        # ✅ 写入 Streamlit 会话状态
+        st.session_state.update({
+            "is_authenticated": True,
+            "user_id": user.id,
+            "username": user.username,
+            "role": user.role,
+            "access_token": access_token
+        })
 
-        # ✅ 返回统一结构（dict）
         return {
             "id": user.id,
             "username": user.username,
@@ -98,4 +106,3 @@ def authenticate_user(email: str, password: str):
         return {"error": f"登录失败: {e}"}
     finally:
         db.close()
-

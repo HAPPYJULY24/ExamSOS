@@ -1,29 +1,22 @@
-#modules/utils/path_helper.py
-
 # modules/utils/path_helper.py
+# 用于统一管理所有数据库路径
+
 import os
 
-# 当前文件: modules/utils/path_helper.py
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 项目根目录（自动向上两层找到主目录）
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 
-# 回到项目根目录（上两层）
-ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", ".."))
-
-# 数据库目录
-DB_DIR = os.path.join(ROOT_DIR, "database")
-
-# 确保目录存在
+# 数据库主目录
+DB_DIR = os.path.join(BASE_DIR, "database")
 os.makedirs(DB_DIR, exist_ok=True)
 
-# 各数据库路径
-USER_DB = os.path.join(DB_DIR, "user.db")
+# 各个数据库路径
 SYSTEM_DB = os.path.join(DB_DIR, "system.db")
+USER_DB = os.path.join(DB_DIR, "user.db")
+LOG_DB = os.path.join(DB_DIR, "log.db")  # ✅ 这行是关键！
 
-def get_path(name: str):
-    """根据逻辑名称返回数据库路径"""
-    mapping = {
-        "user": USER_DB,
-        "system": SYSTEM_DB,
-    }
-    return mapping.get(name)
-
+# （可选）调试时打印路径
+if __name__ == "__main__":
+    print("SYSTEM_DB:", SYSTEM_DB)
+    print("USER_DB:", USER_DB)
+    print("LOG_DB:", LOG_DB)

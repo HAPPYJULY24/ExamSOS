@@ -5,29 +5,51 @@ import sqlite3
 import datetime
 import json
 import os
-from modules.utils.path_helper import DB_PATH
+import time
+from modules.utils.path_helper import SYSTEM_DB as DB_PATH  # ✅ 统一数据库路径
 
-# === 数据库路径 ===
-
-VALID_STATUS = {'work', 'down', 'change', 'warning', 'done', 'success', 'info'}
-
-
+# === 通用函数 ===
 def ensure_database_ready():
     """确保 database 目录存在"""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 
+def connect_with_retry(db_path, retries=5, delay=0.2):
+    """带重试机制的 SQLite 连接"""
+    for i in range(retries):
+        try:
+            conn = sqlite3.connect(db_path, timeout=5, isolation_level=None)
+            return conn
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e).lower():
+                time.sleep(delay)
+            else:
+                raise
+    raise sqlite3.OperationalError("Database is locked after multiple retries")
+
+
+def enable_wal_mode():
+    """启用 WAL 模式（支持并发读写）"""
+    conn = connect_with_retry(DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.close()
+
+
+# 初始化数据库目录 + WAL
+ensure_database_ready()
+enable_wal_mode()
+
 # === 日志系统 ===
+VALID_STATUS = {'work', 'down', 'change', 'warning', 'done', 'success', 'info'}
 
 def init_log_table():
     """确保 logs 表存在且结构正确"""
-    ensure_database_ready()
-    conn = sqlite3.connect(DB_PATH)
+    conn = connect_with_retry(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TIMESTAMP,
+            created_at TEXT,
             source_module TEXT,
             level TEXT,
             status TEXT CHECK(status IN (
@@ -64,7 +86,7 @@ def log_event(
             print(f"[LOGGER WARNING] 非法状态 '{status}'，已改为 'work'")
             status = "work"
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = connect_with_retry(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO logs (
@@ -73,7 +95,7 @@ def log_event(
                 remark, reason, meta
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            datetime.datetime.now(),
+            datetime.datetime.utcnow().isoformat(),
             source_module,
             level.upper(),
             status,
@@ -94,17 +116,15 @@ def log_event(
         print(f"[LOGGING ERROR] {e}")
         print(f"[{level}] {source_module}: {things} — {remark}")
 
-
 # === Token 使用记录 ===
-
 def init_usage_table():
     """确保 usage_records 表存在"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = connect_with_retry(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usage_records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TIMESTAMP,
+            created_at TEXT,
             user_id TEXT,
             model TEXT,
             prompt_tokens INTEGER,
@@ -143,7 +163,7 @@ def log_token_usage(
     cost = cost_estimate or calculate_cost(model, total_tokens)
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = connect_with_retry(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO usage_records (
@@ -152,7 +172,7 @@ def log_token_usage(
                 total_tokens, cost
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
-            datetime.datetime.now(),
+            datetime.datetime.utcnow().isoformat(),
             user_id,
             model,
             prompt_tokens,
@@ -164,7 +184,7 @@ def log_token_usage(
         conn.close()
 
         log_event(
-            source_module="extractor",
+            source_module="token_tracker",
             level="INFO",
             status="done",
             things=f"Token usage logged: {total_tokens} tokens",
@@ -189,19 +209,17 @@ def log_token_usage(
             by_user=user_id
         )
 
-
 # === 模型单价管理 ===
-
 def init_model_price_table():
     """模型单价表"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = connect_with_retry(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS model_prices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             model TEXT UNIQUE,
             price_per_1k REAL,
-            updated_at TIMESTAMP
+            updated_at TEXT
         )
     """)
     conn.commit()
@@ -210,7 +228,7 @@ def init_model_price_table():
 
 def get_model_price(model: str) -> float:
     """读取模型单价"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = connect_with_retry(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT price_per_1k FROM model_prices WHERE model = ?", (model,))
     row = cursor.fetchone()
@@ -229,7 +247,7 @@ def get_model_price(model: str) -> float:
 
 def set_model_price(model: str, price: float):
     """更新或插入模型单价"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = connect_with_retry(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO model_prices (model, price_per_1k, updated_at)
@@ -238,10 +256,9 @@ def set_model_price(model: str, price: float):
         DO UPDATE SET
             price_per_1k = excluded.price_per_1k,
             updated_at = excluded.updated_at
-    """, (model, price, datetime.datetime.now()))
+    """, (model, price, datetime.datetime.utcnow().isoformat()))
     conn.commit()
     conn.close()
-
 
 # ✅ 启动时初始化所有表
 init_log_table()

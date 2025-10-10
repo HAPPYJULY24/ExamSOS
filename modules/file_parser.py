@@ -16,10 +16,13 @@ from modules.logger import log_event   # ✅ 引入日志模块
 # === 模块健康状态上报 ===
 from modules.utils.system_status import update_module_status
 
+
 try:
     update_module_status("file_parser", "active", "模块加载成功")
 except Exception as e:
     update_module_status("file_parser", "error", str(e))
+
+
 
 # ==============================
 # OCR 功能占位（不加载 easyocr）
